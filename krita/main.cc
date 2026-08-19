@@ -715,13 +715,16 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
 
     /// Initialize application info, it will be used by both, Qt and
     /// DrKonqi of the host system
+    // imagic studio rebrand: only the *display* name changes. The component
+    // name must stay "krita" — it drives QStandardPaths resource folders,
+    // the kritarc config file name and KF component lookups.
     KAboutData aboutData("krita",
-                            i18n("Krita"),
+                            QStringLiteral("imagic studio"),
                             KritaVersionWrapper::versionString(true),
-                            i18n("Krita is the full-featured digital art studio"),
+                            i18n("imagic studio, based on Krita, is a full-featured digital art studio"),
                             KAboutLicense::GPL,
                             i18nc("@info:credit", "© 1999–2026 The Krita Developers"));
-    aboutData.setHomepage(QStringLiteral("https://krita.org"));
+    aboutData.setHomepage(QStringLiteral("https://imagic.ink"));
     aboutData.setOrganizationDomain("krita.org");
 
     // this call sets corresponding fields of QApplication as well

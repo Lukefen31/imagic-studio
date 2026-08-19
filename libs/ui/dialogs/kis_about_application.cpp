@@ -32,7 +32,7 @@ public:
 KisAboutApplication::KisAboutApplication(QWidget *parent)
     : KoDialog(parent)
 {
-    setWindowTitle(i18n("About Krita"));
+    setWindowTitle(i18n("About imagic studio"));
     setButtons(KoDialog::Close);
 
     WdgAboutApplication *wdgTab = new WdgAboutApplication(this);
