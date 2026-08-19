@@ -232,11 +232,22 @@ void ThemeManager::slotChangePalette()
     QString theme(currentThemeName());
     QString filename        = d->themeMap.value(theme);
 
+    // imagic studio: the brand look is deterministic. Any imagic theme is
+    // applied from code, never from scheme-file discovery — file lookup on
+    // Windows proved unreliable in ways that silently fell back to other
+    // palettes. The .colors file remains only so the theme lists in Settings.
+    const bool imagicTheme = theme.startsWith(QLatin1String("imagic"), Qt::CaseInsensitive);
+
+    qWarning() << "ThemeManager: applying theme" << theme
+               << (imagicTheme ? "(built-in imagic palette)" : filename);
+
     QPalette palette = qApp->palette();
 
-    if (filename.isEmpty()) {
-        qWarning() << "ThemeManager: theme" << theme << "is not in the theme map"
-                   << d->themeMap.keys() << "- applying the built-in imagic dark palette";
+    if (imagicTheme || filename.isEmpty()) {
+        if (!imagicTheme) {
+            qWarning() << "ThemeManager: theme" << theme << "is not in the theme map"
+                       << d->themeMap.keys() << "- applying the built-in imagic dark palette";
+        }
         palette = imagicDarkPalette();
     } else {
         KSharedConfigPtr config = KSharedConfig::openConfig(filename);
