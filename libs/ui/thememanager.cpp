@@ -131,10 +131,93 @@ void ThemeManager::setCurrentTheme(const QString& name)
     slotChangePalette();
 }
 
+namespace {
+
+// imagic studio: the brand palette in code, used whenever a scheme-file
+// lookup misses. The upstream behavior in that case was to feed an empty
+// config to KColorScheme, which silently produced its built-in light
+// defaults — a light grey UI with azure highlights. Brand-correct worst
+// case instead.
+QPalette imagicDarkPalette()
+{
+    const QColor window(26, 26, 26);
+    const QColor base(20, 20, 20);
+    const QColor button(37, 37, 37);
+    const QColor textPrimary(240, 240, 240);
+    const QColor textDisabled(107, 107, 107);
+    const QColor accent(255, 152, 0);
+    const QColor onAccent(13, 13, 13);
+
+    QPalette p;
+    const QPalette::ColorGroup states[3] = { QPalette::Active, QPalette::Inactive, QPalette::Disabled };
+    for (int i = 0; i < 3; ++i) {
+        const QPalette::ColorGroup state = states[i];
+        const bool disabled = (state == QPalette::Disabled);
+        const QColor fg = disabled ? textDisabled : textPrimary;
+        p.setColor(state, QPalette::Window,          window);
+        p.setColor(state, QPalette::WindowText,      fg);
+        p.setColor(state, QPalette::Base,            base);
+        p.setColor(state, QPalette::AlternateBase,   window);
+        p.setColor(state, QPalette::Text,            fg);
+        p.setColor(state, QPalette::Button,          button);
+        p.setColor(state, QPalette::ButtonText,      fg);
+        p.setColor(state, QPalette::Highlight,       disabled ? QColor(51, 51, 51) : accent);
+        p.setColor(state, QPalette::HighlightedText, disabled ? textDisabled : onAccent);
+        p.setColor(state, QPalette::ToolTipBase,     window);
+        p.setColor(state, QPalette::ToolTipText,     textPrimary);
+        p.setColor(state, QPalette::PlaceholderText, textDisabled);
+        p.setColor(state, QPalette::Link,            QColor(255, 167, 38));
+        p.setColor(state, QPalette::LinkVisited,     QColor(245, 124, 0));
+        p.setColor(state, QPalette::Light,           QColor(51, 51, 51));
+        p.setColor(state, QPalette::Midlight,        QColor(42, 42, 42));
+        p.setColor(state, QPalette::Mid,             QColor(31, 31, 31));
+        p.setColor(state, QPalette::Dark,            QColor(10, 10, 10));
+        p.setColor(state, QPalette::Shadow,          QColor(0, 0, 0));
+    }
+    return p;
+}
+
+// imagic studio: chrome layer on top of the palette — the surfaces Qt
+// styles natively (menu bar, menus, toolbars, dock titles, tabs, status
+// bar, scrollbars, tooltips) get explicit brand colors. Applied only for
+// the imagic themes; picking any other theme clears it.
+QString imagicChromeStyleSheet()
+{
+    return QStringLiteral(
+        "QMenuBar { background-color: #141414; color: #f0f0f0; }"
+        "QMenuBar::item { background: transparent; padding: 4px 10px; }"
+        "QMenuBar::item:selected { background: #252525; }"
+        "QMenuBar::item:pressed { background: #ff9800; color: #0d0d0d; }"
+        "QMenu { background-color: #1a1a1a; color: #f0f0f0; border: 1px solid #333333; }"
+        "QMenu::item { padding: 4px 24px; background: transparent; }"
+        "QMenu::item:selected { background: #ff9800; color: #0d0d0d; }"
+        "QMenu::item:disabled { color: #6b6b6b; }"
+        "QMenu::separator { height: 1px; background: #333333; margin: 4px 8px; }"
+        "QToolBar { background-color: #141414; border: none; }"
+        "QStatusBar { background-color: #141414; color: #a0a0a0; }"
+        "QDockWidget { color: #a0a0a0; }"
+        "QDockWidget::title { background-color: #141414; padding: 4px 8px; text-align: left; }"
+        "QTabBar::tab { background: #141414; color: #a0a0a0; padding: 4px 10px; border: 1px solid #2a2a2a; border-bottom: none; }"
+        "QTabBar::tab:selected { background: #1a1a1a; color: #f0f0f0; }"
+        "QTabBar::tab:hover { color: #f0f0f0; }"
+        "QToolTip { background-color: #1a1a1a; color: #f0f0f0; border: 1px solid #333333; }"
+        "QScrollBar:vertical { background: #141414; width: 12px; margin: 0; }"
+        "QScrollBar::handle:vertical { background: #333333; border-radius: 4px; min-height: 24px; margin: 2px; }"
+        "QScrollBar::handle:vertical:hover { background: #ff9800; }"
+        "QScrollBar:horizontal { background: #141414; height: 12px; margin: 0; }"
+        "QScrollBar::handle:horizontal { background: #333333; border-radius: 4px; min-width: 24px; margin: 2px; }"
+        "QScrollBar::handle:horizontal:hover { background: #ff9800; }"
+        "QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }"
+        "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }");
+}
+
+} // namespace
+
 void ThemeManager::slotChangePalette()
 {
     if (currentThemeName() == "System") {
         qApp->setPalette(QPalette());
+        qApp->setStyleSheet(QString());
         Q_EMIT signalThemeChanged();
         return;
     }
@@ -148,48 +231,65 @@ void ThemeManager::slotChangePalette()
 
     QString theme(currentThemeName());
     QString filename        = d->themeMap.value(theme);
-    KSharedConfigPtr config = KSharedConfig::openConfig(filename);
 
-    QPalette palette               = qApp->palette();
-    QPalette::ColorGroup states[3] = { QPalette::Active, QPalette::Inactive, QPalette::Disabled };
-    // TT thinks tooltips shouldn't use active, so we use our active colors for all states
-    KColorScheme schemeTooltip(QPalette::Active, KColorScheme::Tooltip, config);
+    QPalette palette = qApp->palette();
 
-    for ( int i = 0; i < 3 ; ++i ) {
+    if (filename.isEmpty()) {
+        qWarning() << "ThemeManager: theme" << theme << "is not in the theme map"
+                   << d->themeMap.keys() << "- applying the built-in imagic dark palette";
+        palette = imagicDarkPalette();
+    } else {
+        KSharedConfigPtr config = KSharedConfig::openConfig(filename);
 
-        QPalette::ColorGroup state = states[i];
-        KColorScheme schemeView(state,      KColorScheme::View,      config);
-        KColorScheme schemeWindow(state,    KColorScheme::Window,    config);
-        KColorScheme schemeButton(state,    KColorScheme::Button,    config);
-        KColorScheme schemeSelection(state, KColorScheme::Selection, config);
+        QPalette::ColorGroup states[3] = { QPalette::Active, QPalette::Inactive, QPalette::Disabled };
+        // TT thinks tooltips shouldn't use active, so we use our active colors for all states
+        KColorScheme schemeTooltip(QPalette::Active, KColorScheme::Tooltip, config);
 
-        palette.setBrush(state, QPalette::WindowText,      schemeWindow.foreground());
-        palette.setBrush(state, QPalette::Window,          schemeWindow.background());
-        palette.setBrush(state, QPalette::Base,            schemeView.background());
-        palette.setBrush(state, QPalette::Text,            schemeView.foreground());
-        palette.setBrush(state, QPalette::Button,          schemeButton.background());
-        palette.setBrush(state, QPalette::ButtonText,      schemeButton.foreground());
-        palette.setBrush(state, QPalette::Highlight,       schemeSelection.background());
-        palette.setBrush(state, QPalette::HighlightedText, schemeSelection.foreground());
-        palette.setBrush(state, QPalette::ToolTipBase,     schemeTooltip.background());
-        palette.setBrush(state, QPalette::ToolTipText,     schemeTooltip.foreground());
-        palette.setBrush(state, QPalette::PlaceholderText, schemeView.foreground(KColorScheme::InactiveText));
+        for ( int i = 0; i < 3 ; ++i ) {
 
-        palette.setColor(state, QPalette::Light,           schemeWindow.shade(KColorScheme::LightShade));
-        palette.setColor(state, QPalette::Midlight,        schemeWindow.shade(KColorScheme::MidlightShade));
-        palette.setColor(state, QPalette::Mid,             schemeWindow.shade(KColorScheme::MidShade));
-        palette.setColor(state, QPalette::Dark,            schemeWindow.shade(KColorScheme::DarkShade));
-        palette.setColor(state, QPalette::Shadow,          schemeWindow.shade(KColorScheme::ShadowShade));
+            QPalette::ColorGroup state = states[i];
+            KColorScheme schemeView(state,      KColorScheme::View,      config);
+            KColorScheme schemeWindow(state,    KColorScheme::Window,    config);
+            KColorScheme schemeButton(state,    KColorScheme::Button,    config);
+            KColorScheme schemeSelection(state, KColorScheme::Selection, config);
 
-        palette.setBrush(state, QPalette::AlternateBase,   schemeView.background(KColorScheme::AlternateBackground));
-        palette.setBrush(state, QPalette::Link,            schemeView.foreground(KColorScheme::LinkText));
-        palette.setBrush(state, QPalette::LinkVisited,     schemeView.foreground(KColorScheme::VisitedText));
+            palette.setBrush(state, QPalette::WindowText,      schemeWindow.foreground());
+            palette.setBrush(state, QPalette::Window,          schemeWindow.background());
+            palette.setBrush(state, QPalette::Base,            schemeView.background());
+            palette.setBrush(state, QPalette::Text,            schemeView.foreground());
+            palette.setBrush(state, QPalette::Button,          schemeButton.background());
+            palette.setBrush(state, QPalette::ButtonText,      schemeButton.foreground());
+            palette.setBrush(state, QPalette::Highlight,       schemeSelection.background());
+            palette.setBrush(state, QPalette::HighlightedText, schemeSelection.foreground());
+            palette.setBrush(state, QPalette::ToolTipBase,     schemeTooltip.background());
+            palette.setBrush(state, QPalette::ToolTipText,     schemeTooltip.foreground());
+            palette.setBrush(state, QPalette::PlaceholderText, schemeView.foreground(KColorScheme::InactiveText));
+
+            palette.setColor(state, QPalette::Light,           schemeWindow.shade(KColorScheme::LightShade));
+            palette.setColor(state, QPalette::Midlight,        schemeWindow.shade(KColorScheme::MidlightShade));
+            palette.setColor(state, QPalette::Mid,             schemeWindow.shade(KColorScheme::MidShade));
+            palette.setColor(state, QPalette::Dark,            schemeWindow.shade(KColorScheme::DarkShade));
+            palette.setColor(state, QPalette::Shadow,          schemeWindow.shade(KColorScheme::ShadowShade));
+
+            palette.setBrush(state, QPalette::AlternateBase,   schemeView.background(KColorScheme::AlternateBackground));
+            palette.setBrush(state, QPalette::Link,            schemeView.foreground(KColorScheme::LinkText));
+            palette.setBrush(state, QPalette::LinkVisited,     schemeView.foreground(KColorScheme::VisitedText));
+        }
     }
-    
+
     //qDebug() << ">>>>>>>>>>>>>>>>>> going to set palette on app" << theme;
     // hint for the style to synchronize the color scheme with the window manager/compositor
     qApp->setProperty("KDE_COLOR_SCHEME_PATH", filename);
     qApp->setPalette(palette);
+
+    // imagic studio: brand chrome for the imagic themes; a clean slate for
+    // anything else the user picks in Settings.
+    if (theme.startsWith(QLatin1String("imagic"), Qt::CaseInsensitive)) {
+        qApp->setStyleSheet(imagicChromeStyleSheet());
+    } else {
+        qApp->setStyleSheet(QString());
+    }
+
     KisConfigNotifier::instance()->notifyColorThemeChanged(filename);
 
     Q_EMIT signalThemeChanged();

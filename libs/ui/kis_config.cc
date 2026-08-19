@@ -678,7 +678,8 @@ void KisConfig::setDefaultGridSpacing(QPoint gridSpacing)
 
 QString KisConfig::getMDIBackgroundColor(bool defaultValue) const
 {
-    QColor col(77, 77, 77);
+    // imagic studio: the canvas surround defaults to the brand near-black
+    QColor col(13, 13, 13);
     KoColor kol(KoColorSpaceRegistry::instance()->rgb8());
     kol.fromQColor(col);
     QString xml = kol.toXML();
