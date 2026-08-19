@@ -341,7 +341,9 @@ add_feature_info("Limit long tests" LIMIT_LONG_TESTS "Run long running unittests
 option(BUILD_KRITA_QT_DESIGNER_PLUGINS "Build Qt Designer plugins for Krita widgets" OFF)
 add_feature_info("Build Qt Designer plugins" BUILD_KRITA_QT_DESIGNER_PLUGINS "Builds Qt Designer plugins for Krita widgets (use -DBUILD_KRITA_QT_DESIGNER_PLUGINS=ON to enable).")
 
-option(ENABLE_UPDATERS "Enable updaters/update notifications" ON)
+# imagic studio: no update checks against krita.org — releases ship through
+# imagic's own channel, so the updater would nag users toward the wrong product.
+option(ENABLE_UPDATERS "Enable updaters/update notifications" OFF)
 configure_file(config-updaters.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config-updaters.h)
 add_feature_info("Enable updaters" ENABLE_UPDATERS "Enable updaters/update notifications.")
 
@@ -390,8 +392,9 @@ if ("${BRANDING}" STREQUAL "")
         # Alpha/pre-alpha in stable branch
         set(BRANDING "Plus")
     else ()
-        # Alpha/pre-alpha in master branch or other experiments
-        set(BRANDING "Next")
+        # imagic studio: always build with the default branding dir, which
+        # carries the imagic artwork (upstream uses Next for master builds).
+        set(BRANDING "default")
     endif ()
 endif()
 

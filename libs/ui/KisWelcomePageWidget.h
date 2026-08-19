@@ -112,11 +112,10 @@ private:
 
     KisMainWindow *m_mainWindow {nullptr};
 
-    /// help us see how many people are clicking startup screen links
-    /// you can see the results in Matomo (stats.kde.org)
-    /// this will be listed in the "Acquisition" section of Matomo
-    /// just append some text to this to associate it with an event/page
-    const QString analyticsString = "pk_campaign=startup-sceen&pk_kwd=";
+    /// imagic studio: upstream tags outbound clicks with Matomo campaign
+    /// params for KDE's stats. A fork's clicks would pollute their data,
+    /// so the tag is empty here.
+    const QString analyticsString = "";
 
 
     // keeping track of link colors with theme change
