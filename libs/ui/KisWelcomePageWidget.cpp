@@ -133,6 +133,23 @@ KisWelcomePageWidget::KisWelcomePageWidget(QWidget *parent)
     bnVersionUpdate->setVisible(false);
     bnErrorDetails->setVisible(false);
 
+    // imagic studio: let the page paint its stylesheet background (a plain
+    // QWidget subclass ignores qss backgrounds without this attribute)
+    setAttribute(Qt::WA_StyledBackground, true);
+
+    // imagic studio: hide the krita.org news column and the upstream
+    // marketing rows; the footer credit carries attribution. The widgets
+    // stay alive so nothing downstream dereferences a null.
+    widgetRight->setVisible(false);
+    supportKritaIcon->setVisible(false);
+    supportKritaLink->setVisible(false);
+    kdeIcon->setVisible(false);
+    poweredByKDELink->setVisible(false);
+    kritaWebsiteIcon->setVisible(false);
+    kritaWebsiteLink->setVisible(false);
+    userCommunityIcon->setVisible(false);
+    userCommunityLink->setVisible(false);
+
     // Recent docs...
     recentDocumentsListView->setDragEnabled(false);
     recentDocumentsListView->viewport()->setAutoFillBackground(false);
@@ -171,7 +188,12 @@ KisWelcomePageWidget::KisWelcomePageWidget(QWidget *parent)
     setupNewsLangSelection(newsOptionsMenu);
     btnNewsOptions->setMenu(newsOptionsMenu);
 
-    labelSupportText->setFont(largerFont());
+    // imagic studio: the upstream credit is deliberately quiet
+    {
+        QFont subtle = font();
+        subtle.setPointSizeF(subtle.pointSizeF() * 0.85);
+        labelSupportText->setFont(subtle);
+    }
 
     connect(showNewsAction, SIGNAL(toggled(bool)), newsWidget, SLOT(setVisible(bool)));
     connect(showNewsAction, SIGNAL(toggled(bool)), labelNoFeed, SLOT(setHidden(bool)));
@@ -286,12 +308,8 @@ void KisWelcomePageWidget::showDropAreaIndicator(bool show)
         QString dropFrameStyle = QStringLiteral("QFrame#dropAreaIndicator { border: 2px solid transparent }");
         dropFrameBorder->setStyleSheet(dropFrameStyle);
     } else {
-        QColor textColor = qApp->palette().color(QPalette::Text);
-        QColor backgroundColor = qApp->palette().color(QPalette::Window);
-        QColor blendedColor = KisPaintingTweaks::blendColors(textColor, backgroundColor, 0.8);
-
-        // QColor.name() turns it into a hex/web format
-        QString dropFrameStyle = QString("QFrame#dropAreaIndicator { border: 2px dotted ").append(blendedColor.name()).append(" }") ;
+        // imagic accent on the drag-and-drop hover indicator
+        QString dropFrameStyle = QStringLiteral("QFrame#dropAreaIndicator { border: 2px dotted #ff9800 }");
         dropFrameBorder->setStyleSheet(dropFrameStyle);
     }
 }
@@ -301,21 +319,27 @@ void KisWelcomePageWidget::slotUpdateThemeColors()
     textColor = qApp->palette().color(QPalette::Text);
     backgroundColor = qApp->palette().color(QPalette::Window);
 
-    // make the welcome screen labels a subtle color so it doesn't clash with the main UI elements
-    blendedColor = KisPaintingTweaks::blendColors(textColor, backgroundColor, 0.8);
-    // only apply color to the widget itself, not to the tooltip or something
-    blendedStyle = "QWidget{color: " + blendedColor.name() + "}";
+    // imagic studio: the welcome page is the brand surface, so it paints the
+    // imagic identity directly instead of deriving everything from the theme.
+    // Brand tokens: page #0d0d0d, card #1a1a1a, border #333, accent #ff9800.
+    const QString textPrimaryStyle = QStringLiteral("QWidget{color: #f0f0f0;}");
+    const QString textSecondaryStyle = QStringLiteral("QWidget{color: #a0a0a0;}");
 
-    // what labels to change the color...
-    startTitleLabel->setStyleSheet(blendedStyle);
-    recentDocumentsLabel->setStyleSheet(blendedStyle);
-    helpTitleLabel->setStyleSheet(blendedStyle);
-    newsTitleLabel->setStyleSheet(blendedStyle);
-    newFileLinkShortcut->setStyleSheet(blendedStyle);
-    openFileShortcut->setStyleSheet(blendedStyle);
-    clearRecentFilesLink->setStyleSheet(blendedStyle);
-    recentDocumentsListView->setStyleSheet(blendedStyle);
-    newsWidget->setStyleSheet(blendedStyle);
+    // kept for the dev-build and updater labels below, which follow the theme
+    blendedColor = KisPaintingTweaks::blendColors(textColor, backgroundColor, 0.8);
+    blendedStyle = textPrimaryStyle;
+
+    setStyleSheet(QStringLiteral("QWidget#KisWelcomePage { background-color: #0d0d0d; }"));
+
+    startTitleLabel->setStyleSheet(textPrimaryStyle);
+    recentDocumentsLabel->setStyleSheet(textPrimaryStyle);
+    helpTitleLabel->setStyleSheet(textPrimaryStyle);
+    newsTitleLabel->setStyleSheet(textPrimaryStyle);
+    newFileLinkShortcut->setStyleSheet(textSecondaryStyle);
+    openFileShortcut->setStyleSheet(textSecondaryStyle);
+    clearRecentFilesLink->setStyleSheet(textSecondaryStyle);
+    recentDocumentsListView->setStyleSheet(QStringLiteral("QWidget{color: #f0f0f0; background: transparent;}"));
+    newsWidget->setStyleSheet(textPrimaryStyle);
 
 #ifdef Q_OS_ANDROID
     blendedStyle = blendedStyle + "\nQPushButton { padding: 10px }";
@@ -324,10 +348,9 @@ void KisWelcomePageWidget::slotUpdateThemeColors()
     newFileLink->setStyleSheet(blendedStyle);
     openFileLink->setStyleSheet(blendedStyle);
 
-    // make drop area QFrame have a dotted line
+    // the drop frame stays invisible until a drag hovers (showDropAreaIndicator)
     dropFrameBorder->setObjectName("dropAreaIndicator");
-    QString dropFrameStyle = QString("QFrame#dropAreaIndicator { border: 4px dotted ").append(blendedColor.name()).append("}");
-    dropFrameBorder->setStyleSheet(dropFrameStyle);
+    dropFrameBorder->setStyleSheet(QStringLiteral("QFrame#dropAreaIndicator { border: 4px solid transparent }"));
 
     // only show drop area when we have a document over the empty area
     showDropAreaIndicator(false);
@@ -350,40 +373,45 @@ void KisWelcomePageWidget::slotUpdateThemeColors()
     sourceCodeIcon->setIcon(KisIconUtils::loadIcon(QStringLiteral("code")));
     kdeIcon->setIcon(KisIconUtils::loadIcon(QStringLiteral("kde")));
 
-    // HTML links seem to be a bit more stubborn with theme changes... setting inline styles to help with color change
-    userCommunityLink->setText(QString("<a style=\"color: " + blendedColor.name() + " \" href=\"https://krita-artists.org\">")
+    // imagic studio: visible links carry the amber brand accent. Hidden
+    // upstream rows keep their text set so nothing breaks if re-enabled.
+    const QString linkColor = QStringLiteral("#ffa726");
+
+    userCommunityLink->setText(QString("<a style=\"color: " + linkColor + " \" href=\"https://krita-artists.org\">")
                                .append(i18n("User Community")).append("</a>"));
 
-    gettingStartedLink->setText(QString("<a style=\"color: " + blendedColor.name() + " \" href=\"https://docs.krita.org/user_manual/getting_started.html\">")
+    gettingStartedLink->setText(QString("<a style=\"color: " + linkColor + " \" href=\"https://docs.krita.org/user_manual/getting_started.html\">")
                                 .append(i18n("Getting Started")).append("</a>"));
 
-    manualLink->setText(QString("<a style=\"color: " + blendedColor.name() + " \" href=\"https://docs.krita.org\">")
+    manualLink->setText(QString("<a style=\"color: " + linkColor + " \" href=\"https://docs.krita.org\">")
                         .append(i18n("User Manual")).append("</a>"));
 
-    supportKritaLink->setText(QString("<a style=\"color: " + blendedColor.name() + " \" href=\"https://krita.org/support-us/donations?" + analyticsString + "donations" + "\">")
+    supportKritaLink->setText(QString("<a style=\"color: " + linkColor + " \" href=\"https://krita.org/support-us/donations\">")
                               .append(i18n("Support Krita")).append("</a>"));
 
-    kritaWebsiteLink->setText(QString("<a style=\"color: " + blendedColor.name() + " \" href=\"https://www.krita.org?" + analyticsString + "marketing-site" + "\">")
+    kritaWebsiteLink->setText(QString("<a style=\"color: " + linkColor + " \" href=\"https://www.krita.org\">")
                               .append(i18n("Krita Website")).append("</a>"));
 
-    sourceCodeLink->setText(QString("<a style=\"color: " + blendedColor.name() + " \" href=\"https://invent.kde.org/graphics/krita\">")
+    // this fork's actual corresponding source
+    sourceCodeLink->setText(QString("<a style=\"color: " + linkColor + " \" href=\"https://github.com/Lukefen31/imagic-studio\">")
                             .append(i18n("Source Code")).append("</a>"));
 
-    poweredByKDELink->setText(QString("<a style=\"color: " + blendedColor.name() + " \" href=\"https://userbase.kde.org/What_is_KDE\">")
+    poweredByKDELink->setText(QString("<a style=\"color: " + linkColor + " \" href=\"https://userbase.kde.org/What_is_KDE\">")
                               .append(i18n("Powered by KDE")).append("</a>"));
 
     QString translationNoFeed = i18n("You can <a href=\"ignored\" style=\"color: COLOR_PLACEHOLDER; text-decoration: underline;\">enable news</a> from krita.org in various languages with the menu above");
-    labelNoFeed->setText(translationNoFeed.replace("COLOR_PLACEHOLDER", blendedColor.name()));
+    labelNoFeed->setText(translationNoFeed.replace("COLOR_PLACEHOLDER", linkColor));
 
-    const QColor faintTextColor = KisPaintingTweaks::blendColors(textColor, backgroundColor, 0.4);
-    const QString &faintTextStyle = "QWidget{color: " + faintTextColor.name() + "}";
+    const QString faintTextStyle = QStringLiteral("QWidget{color: #6b6b6b;}");
     labelNoRecentDocs->setStyleSheet(faintTextStyle);
     labelNoFeed->setStyleSheet(faintTextStyle);
 
-    const QColor frameColor = KisPaintingTweaks::blendColors(textColor, backgroundColor, 0.1);
-    const QString &frameQss = "{border: 1px solid " + frameColor.name() + "}";
-    recentDocsStackedWidget->setStyleSheet("QStackedWidget#recentDocsStackedWidget" + frameQss);
-    newsFrame->setStyleSheet("QFrame#newsFrame" + frameQss);
+    // imagic card treatment for the content panels
+    recentDocsStackedWidget->setStyleSheet(QStringLiteral(
+        "QStackedWidget#recentDocsStackedWidget {"
+        " border: 1px solid #333333; border-radius: 12px; background-color: #1a1a1a; }"));
+    newsFrame->setStyleSheet(QStringLiteral(
+        "QFrame#newsFrame { border: 1px solid #333333; border-radius: 12px; background-color: #1a1a1a; }"));
 
     // show the dev version labels, if dev version is detected
     showDevVersionHighlight();
@@ -469,7 +497,9 @@ void KisWelcomePageWidget::dragLeaveEvent(QDragLeaveEvent */*event*/)
 void KisWelcomePageWidget::changeEvent(QEvent *event)
 {
     if (event->type() == QEvent::FontChange) {
-        labelSupportText->setFont(largerFont());
+        QFont subtle = font();
+        subtle.setPointSizeF(subtle.pointSizeF() * 0.85);
+        labelSupportText->setFont(subtle);
     }
 }
 
