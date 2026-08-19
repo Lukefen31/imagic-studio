@@ -41,7 +41,7 @@ KisKShortcutSchemesEditor::KisKShortcutSchemesEditor(KisShortcutsDialog *parent)
     auto schemeFileLocations = KisKShortcutSchemesHelper::schemeFileLocations();
     schemes << schemeFileLocations.keys();
 
-    QString currentScheme = group.readEntry("Current Scheme", "Default");
+    QString currentScheme = group.readEntry("Current Scheme", "photoshop_compatible");
     QString schemeFileName = KisKShortcutSchemesHelper::schemeFileLocations().value(currentScheme);
     if (!QFileInfo(schemeFileName).exists()) {
         currentScheme = "Default";

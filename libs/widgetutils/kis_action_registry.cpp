@@ -187,7 +187,9 @@ KisActionRegistry::KisActionRegistry()
     : d(new KisActionRegistry::Private(this))
 {
     KConfigGroup cg = KSharedConfig::openConfig()->group("Shortcut Schemes");
-    QString schemeName = cg.readEntry("Current Scheme", "Default");
+    // imagic studio: fresh profiles start on the Photoshop-compatible scheme.
+    // Falls back to "Default" below if the scheme file is ever missing.
+    QString schemeName = cg.readEntry("Current Scheme", "photoshop_compatible");
     QString schemeFileName = KisKShortcutSchemesHelper::schemeFileLocations().value(schemeName);
     if (!QFileInfo(schemeFileName).exists()) {
         schemeName = "Default";

@@ -331,7 +331,9 @@ void KisInputProfileManager::loadProfiles()
     QString currentProfile = cfg.currentInputProfile();
     if (d->profiles.size() > 0) {
         if (currentProfile.isEmpty() || !d->profiles.contains(currentProfile)) {
-            QString kritaDefault = QStringLiteral("Krita Default");
+            // imagic studio: default canvas gestures to the Photoshop-compatible
+            // input profile so pan/zoom/pick modifiers match what PS users expect.
+            QString kritaDefault = QStringLiteral("Photoshop Compatible");
             if (d->profiles.contains(kritaDefault)) {
                 d->currentProfile = d->profiles.value(kritaDefault);
             } else {
