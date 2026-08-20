@@ -20,7 +20,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+try:  # MCP SDK 1.x
+    from mcp.server.fastmcp import FastMCP
+except ImportError:  # MCP SDK 2.x renamed it
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
 # Export can legitimately take minutes on first run (resource cache build).
 _EXPORT_TIMEOUT_S = 600
