@@ -16,6 +16,7 @@ on:
     branches: ["imagic/main"]
     paths-ignore:
       - "**.md"
+      - "mcp/**"
   workflow_dispatch:
 
 concurrency:
