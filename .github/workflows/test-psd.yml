@@ -70,6 +70,13 @@ jobs:
           "$($llvm.FullName)\bin"  | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
           "$($cmake.FullName)\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
+      - name: Report runner resources
+        run: |
+          Get-PSDrive C | Select-Object Used,Free
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object @{n='FreeGB';e={[math]::Round($_.FreePhysicalMemory/1MB,2)}},
+                          @{n='TotalGB';e={[math]::Round($_.TotalVisibleMemorySize/1MB,2)}}
+
       - name: Restore ccache
         uses: actions/cache@v4
         with:
@@ -90,6 +97,11 @@ jobs:
       - name: Build with tests enabled
         env:
           KDECI_BUILD_TYPE: Release
+          # Attempt 1 lost the runner 1h39m into this step with "lost
+          # communication", the classic shape of an out-of-memory kill.
+          # BUILD_TESTING=ON adds hundreds of link targets that the installer
+          # build never produces, and parallel linking is the memory peak.
+          CMAKE_BUILD_PARALLEL_LEVEL: "2"
           KDECI_CC_CACHE: ${{ github.workspace }}\.ccache
           KDECI_CACHE_PATH: ${{ github.workspace }}\.kde-dep-cache
           KDECI_GITLAB_SERVER: https://invent.kde.org/
@@ -115,6 +127,10 @@ jobs:
           python -u krita-deps-management/tools/replace-branch-in-seed-file.py krita-deps-management/latest/krita-deps.yml -p -o branch-corrected-deps.yml -d master
           python -u krita-deps-management/tools/generate-deps-file.py -s branch-corrected-deps.yml -o .kde-ci.yml
           python -u krita-deps-management/ci-utilities/run-ci-build.py --project $env:CI_PROJECT_NAME --branch $env:CI_COMMIT_REF_NAME --platform Windows/Qt5/Shared --skip-publishing 2>&1 | Tee-Object -FilePath "build-tests.log"
+
+      - name: Report runner resources after build
+        if: always()
+        run: Get-PSDrive C | Select-Object Used,Free
 
       - name: Run the PSD tests
         run: |
