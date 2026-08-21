@@ -155,6 +155,23 @@ void PsdAdditionalLayerInfoBlock::readImpl(QIODevice &io)
             fillType = psd_fill_pattern;
         } else if (key == "brit") {
         } else if (key == "levl") {
+            // Levels. Version, then 29 fixed-size channel records. Record 0
+            // is the composite channel, which is what Krita's levels filter
+            // adjusts in its default lightness mode; the per-channel records
+            // after it are left to the offset verifier to skip.
+            quint16 levelsVersion;
+            SAFE_READ_EX(byteOrder, io, levelsVersion);
+            if (levelsVersion == 2) {
+                SAFE_READ_EX(byteOrder, io, levels.inputFloor);
+                SAFE_READ_EX(byteOrder, io, levels.inputCeiling);
+                SAFE_READ_EX(byteOrder, io, levels.outputFloor);
+                SAFE_READ_EX(byteOrder, io, levels.outputCeiling);
+                SAFE_READ_EX(byteOrder, io, levels.gamma);
+                adjustmentType = psd_adjustment_levels;
+            } else {
+                warnKrita << "WARNING: unsupported levels block version" << levelsVersion
+                          << "; the layer will be imported as pixels";
+            }
         } else if (key == "curv") {
         } else if (key == "expA") {
         } else if (key == "vibA") {
@@ -166,8 +183,15 @@ void PsdAdditionalLayerInfoBlock::readImpl(QIODevice &io)
         } else if (key == "mixr") {
         } else if (key == "clrL") {
         } else if (key == "nvrt") {
+            // Invert takes no parameters: the key itself is the whole
+            // configuration.
+            adjustmentType = psd_adjustment_invert;
         } else if (key == "post") {
+            SAFE_READ_EX(byteOrder, io, adjustmentValue);
+            adjustmentType = psd_adjustment_posterize;
         } else if (key == "thrs") {
+            SAFE_READ_EX(byteOrder, io, adjustmentValue);
+            adjustmentType = psd_adjustment_threshold;
         } else if (key == "selc") {
         } else if (key == "lrFX") {
             // deprecated! use lfx2 instead!
