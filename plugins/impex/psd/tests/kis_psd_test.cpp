@@ -24,6 +24,7 @@
 #include "kis_paint_device_debug_utils.h"
 #include <KisImportExportErrorCode.h>
 #include <kis_generator_layer.h>
+#include <kis_adjustment_layer.h>
 #include <kis_filter_configuration.h>
 #include <kis_transparency_mask.h>
 #include <kis_selection.h>
@@ -153,6 +154,67 @@ void KisPSDTest::testOpenGroupLayers()
     QVERIFY(group);
 
     QVERIFY(group->passThroughMode());
+}
+
+void KisPSDTest::testOpenAdjustmentLayers()
+{
+    // Photoshop adjustment layers used to be recognised and then dropped:
+    // every one of the sixteen keys was an empty branch. These four now map
+    // onto filters Krita already ships, so they arrive as live filter
+    // layers rather than flattened pixels.
+    QFileInfo sourceFileInfo(QString(FILES_DATA_DIR) + '/' + "adjustment_layers.psd");
+
+    Q_ASSERT(sourceFileInfo.exists());
+
+    QSharedPointer<KisDocument> doc = openPsdDocument(sourceFileInfo);
+    QVERIFY(doc->image());
+
+    struct Expected {
+        const char *layerName;
+        const char *filterId;
+    };
+    const Expected expected[] = {
+        {"PS Levels", "levels"},
+        {"PS Invert", "invert"},
+        {"PS Posterize", "posterize"},
+        {"PS Threshold", "threshold"},
+    };
+
+    for (const Expected &e : expected) {
+        KisNodeSP node = TestUtil::findNode(doc->image()->root(), e.layerName);
+        QVERIFY2(node, e.layerName);
+
+        KisAdjustmentLayer *adjustment = dynamic_cast<KisAdjustmentLayer *>(node.data());
+        QVERIFY2(adjustment, e.layerName);
+
+        KisFilterConfigurationSP config = adjustment->filter();
+        QVERIFY2(config, e.layerName);
+        QCOMPARE(config->name(), QString(e.filterId));
+    }
+
+    // The stored parameters have to survive, not just the layer type: a
+    // levels layer that imports at defaults is indistinguishable from one
+    // that was silently dropped.
+    KisNodeSP levelsNode = TestUtil::findNode(doc->image()->root(), "PS Levels");
+    KisAdjustmentLayer *levels = dynamic_cast<KisAdjustmentLayer *>(levelsNode.data());
+    QVERIFY(levels);
+    KisFilterConfigurationSP levelsConfig = levels->filter();
+    QCOMPARE(levelsConfig->getInt("blackvalue", -1), 20);
+    QCOMPARE(levelsConfig->getInt("whitevalue", -1), 200);
+    QCOMPARE(levelsConfig->getInt("outblackvalue", -1), 10);
+    QCOMPARE(levelsConfig->getInt("outwhitevalue", -1), 240);
+    // Photoshop stores gamma x100.
+    QVERIFY(qAbs(levelsConfig->getDouble("gammavalue", 0.0) - 1.5) < 0.001);
+
+    KisNodeSP posterizeNode = TestUtil::findNode(doc->image()->root(), "PS Posterize");
+    KisAdjustmentLayer *posterize = dynamic_cast<KisAdjustmentLayer *>(posterizeNode.data());
+    QVERIFY(posterize);
+    QCOMPARE(posterize->filter()->getInt("steps", -1), 7);
+
+    KisNodeSP thresholdNode = TestUtil::findNode(doc->image()->root(), "PS Threshold");
+    KisAdjustmentLayer *threshold = dynamic_cast<KisAdjustmentLayer *>(thresholdNode.data());
+    QVERIFY(threshold);
+    QCOMPARE(threshold->filter()->getInt("threshold", -1), 90);
 }
 
 void KisPSDTest::testOpenLayerStyles()
