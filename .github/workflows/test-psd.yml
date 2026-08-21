@@ -5,14 +5,22 @@
 # way with testing ON and runs just the PSD suite, which is the only
 # automated check the C++ side of the PSD work gets.
 #
-# Deliberately manual (workflow_dispatch): it is the same multi-hour build
-# as the installer job, so running it on every push would be wasteful.
-# Trigger it after touching the PSD plugin or libs/psd.
+# Runs when PSD code actually changes, on any branch, plus on demand. It is
+# the same multi-hour build as the installer job, but ccache is shared with
+# it, so a warm run is minutes. Path-scoped rather than manual-only because
+# workflow_dispatch can only be triggered for workflows that already exist
+# on the default branch, which makes it useless for verifying a change
+# before that change is merged.
 
 name: Test PSD
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "libs/psd/**"
+      - "plugins/impex/psd/**"
+      - ".github/workflows/test-psd.yml"
 
 concurrency:
   group: test-psd-${{ github.ref }}
