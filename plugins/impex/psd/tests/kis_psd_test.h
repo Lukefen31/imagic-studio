@@ -20,6 +20,7 @@ private Q_SLOTS:
     void testOpenGroupLayers();
     void testOpenLayerStyles();
     void testOpenAdjustmentLayers();
+    void testRoundTripAdjustmentLayers();
 
     void testOpenFillLayers();
 

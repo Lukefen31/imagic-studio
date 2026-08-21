@@ -9,6 +9,8 @@
 
 #include <simpletest.h>
 #include <QCoreApplication>
+#include <QDir>
+#include <QTemporaryFile>
 
 #include <testui.h>
 
@@ -212,6 +214,57 @@ void KisPSDTest::testOpenAdjustmentLayers()
     QCOMPARE(posterize->filter()->getInt("steps", -1), 7);
 
     KisNodeSP thresholdNode = TestUtil::findNode(doc->image()->root(), "PS Threshold");
+    KisAdjustmentLayer *threshold = dynamic_cast<KisAdjustmentLayer *>(thresholdNode.data());
+    QVERIFY(threshold);
+    QCOMPARE(threshold->filter()->getInt("threshold", -1), 90);
+}
+
+void KisPSDTest::testRoundTripAdjustmentLayers()
+{
+    // Import alone still loses the adjustments the moment the file is
+    // saved, which is the failure that actually stops a professional
+    // adopting us: the client's PSD comes back damaged. Export has to put
+    // the blocks back.
+    QFileInfo sourceFileInfo(QString(FILES_DATA_DIR) + '/' + "adjustment_layers.psd");
+    Q_ASSERT(sourceFileInfo.exists());
+
+    QSharedPointer<KisDocument> doc = openPsdDocument(sourceFileInfo);
+    QVERIFY(doc->image());
+
+    QTemporaryFile roundTrip(QDir::tempPath() + QLatin1String("/krita_psd_adjustments_XXXXXX.psd"));
+    roundTrip.open();
+    roundTrip.close();
+
+    QVERIFY(doc->exportDocumentSync(roundTrip.fileName(), "image/vnd.adobe.photoshop"));
+
+    QSharedPointer<KisDocument> reloaded = openPsdDocument(QFileInfo(roundTrip.fileName()));
+    QVERIFY(reloaded->image());
+
+    // Same four layers, still adjustments, still carrying their values.
+    KisNodeSP levelsNode = TestUtil::findNode(reloaded->image()->root(), "PS Levels");
+    QVERIFY(levelsNode);
+    KisAdjustmentLayer *levels = dynamic_cast<KisAdjustmentLayer *>(levelsNode.data());
+    QVERIFY2(levels, "levels layer came back as pixels, so export baked it in");
+    KisFilterConfigurationSP levelsConfig = levels->filter();
+    QCOMPARE(levelsConfig->name(), QString("levels"));
+    QCOMPARE(levelsConfig->getInt("blackvalue", -1), 20);
+    QCOMPARE(levelsConfig->getInt("whitevalue", -1), 200);
+    QCOMPARE(levelsConfig->getInt("outblackvalue", -1), 10);
+    QCOMPARE(levelsConfig->getInt("outwhitevalue", -1), 240);
+    QVERIFY(qAbs(levelsConfig->getDouble("gammavalue", 0.0) - 1.5) < 0.011);
+
+    KisNodeSP invertNode = TestUtil::findNode(reloaded->image()->root(), "PS Invert");
+    QVERIFY(invertNode);
+    QVERIFY(dynamic_cast<KisAdjustmentLayer *>(invertNode.data()));
+
+    KisNodeSP posterizeNode = TestUtil::findNode(reloaded->image()->root(), "PS Posterize");
+    QVERIFY(posterizeNode);
+    KisAdjustmentLayer *posterize = dynamic_cast<KisAdjustmentLayer *>(posterizeNode.data());
+    QVERIFY(posterize);
+    QCOMPARE(posterize->filter()->getInt("steps", -1), 7);
+
+    KisNodeSP thresholdNode = TestUtil::findNode(reloaded->image()->root(), "PS Threshold");
+    QVERIFY(thresholdNode);
     KisAdjustmentLayer *threshold = dynamic_cast<KisAdjustmentLayer *>(thresholdNode.data());
     QVERIFY(threshold);
     QCOMPARE(threshold->filter()->getInt("threshold", -1), 90);

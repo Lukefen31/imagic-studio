@@ -1406,6 +1406,15 @@ public:
     void writeLclrBlockEx(QIODevice &io, const quint16 &labelColor);
 
     void writeFillLayerBlockEx(QIODevice &io, const QDomDocument &fillConfig, psd_fill_type type);
+
+    /**
+     * Write one adjustment-layer block (levl / nvrt / post / thrs).
+     *
+     * The counterpart of the read branches: without this an adjustment
+     * layer is exported as its own projection, which bakes the effect
+     * into pixels and loses the layer.
+     */
+    void writeAdjustmentBlockEx(QIODevice &io, psd_adjustment_type type, quint16 value, const psd_levels_record &levels);
     void writeVmskBlockEx(QIODevice &io, psd_vector_mask mask);
     void writeTypeToolBlockEx(QIODevice &io, psd_layer_type_shape typeTool);
     void writeVectorStrokeDataEx(QIODevice &io, const QDomDocument &vectorStroke);
@@ -1464,6 +1473,9 @@ private:
 
     template<psd_byte_order byteOrder = psd_byte_order::psdBigEndian>
     void writeFillLayerBlockExImpl(QIODevice &io, const QDomDocument &fillConfig, psd_fill_type type);
+
+    template<psd_byte_order byteOrder = psd_byte_order::psdBigEndian>
+    void writeAdjustmentBlockExImpl(QIODevice &io, psd_adjustment_type type, quint16 value, const psd_levels_record &levels);
 
     template<psd_byte_order byteOrder = psd_byte_order::psdBigEndian>
     void writeVectorMaskImpl(QIODevice &io, psd_vector_mask mask);

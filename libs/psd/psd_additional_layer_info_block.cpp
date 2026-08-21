@@ -444,6 +444,86 @@ void PsdAdditionalLayerInfoBlock::writeLsctBlockExImpl(QIODevice &io, psd_sectio
     KisAslWriterUtils::writeFixedString<byteOrder>(realBlendModeKey, io);
 }
 
+void PsdAdditionalLayerInfoBlock::writeAdjustmentBlockEx(QIODevice &io,
+                                                        psd_adjustment_type type,
+                                                        quint16 value,
+                                                        const psd_levels_record &levels)
+{
+    switch (m_header.byteOrder) {
+    case psd_byte_order::psdLittleEndian:
+        writeAdjustmentBlockExImpl<psd_byte_order::psdLittleEndian>(io, type, value, levels);
+        break;
+    default:
+        writeAdjustmentBlockExImpl(io, type, value, levels);
+        break;
+    }
+}
+
+template<psd_byte_order byteOrder>
+void PsdAdditionalLayerInfoBlock::writeAdjustmentBlockExImpl(QIODevice &io,
+                                                            psd_adjustment_type type,
+                                                            quint16 value,
+                                                            const psd_levels_record &levels)
+{
+    if (type == psd_adjustment_none) {
+        return;
+    }
+
+    KisAslWriterUtils::writeFixedString<byteOrder>("8BIM", io);
+
+    switch (type) {
+    case psd_adjustment_levels:
+        KisAslWriterUtils::writeFixedString<byteOrder>("levl", io);
+        break;
+    case psd_adjustment_invert:
+        KisAslWriterUtils::writeFixedString<byteOrder>("nvrt", io);
+        break;
+    case psd_adjustment_posterize:
+        KisAslWriterUtils::writeFixedString<byteOrder>("post", io);
+        break;
+    case psd_adjustment_threshold:
+        KisAslWriterUtils::writeFixedString<byteOrder>("thrs", io);
+        break;
+    case psd_adjustment_none:
+        return;
+    }
+
+    KisAslWriterUtils::OffsetStreamPusher<quint32, byteOrder> adjustmentSizeTag(io, 2);
+
+    switch (type) {
+    case psd_adjustment_levels: {
+        // Version, then 29 fixed-size channel records. Photoshop always
+        // writes the full table, so the 28 records after the composite are
+        // padded out at identity rather than omitted.
+        SAFE_WRITE_EX(byteOrder, io, (quint16)2);
+        SAFE_WRITE_EX(byteOrder, io, levels.inputFloor);
+        SAFE_WRITE_EX(byteOrder, io, levels.inputCeiling);
+        SAFE_WRITE_EX(byteOrder, io, levels.outputFloor);
+        SAFE_WRITE_EX(byteOrder, io, levels.outputCeiling);
+        SAFE_WRITE_EX(byteOrder, io, levels.gamma);
+        for (int i = 1; i < 29; i++) {
+            SAFE_WRITE_EX(byteOrder, io, (quint16)0);
+            SAFE_WRITE_EX(byteOrder, io, (quint16)255);
+            SAFE_WRITE_EX(byteOrder, io, (quint16)0);
+            SAFE_WRITE_EX(byteOrder, io, (quint16)255);
+            SAFE_WRITE_EX(byteOrder, io, (quint16)100);
+        }
+        break;
+    }
+    case psd_adjustment_posterize:
+    case psd_adjustment_threshold:
+        // Photoshop pads both of these to four bytes.
+        SAFE_WRITE_EX(byteOrder, io, value);
+        SAFE_WRITE_EX(byteOrder, io, (quint16)0);
+        break;
+    case psd_adjustment_invert:
+        // No payload: the key alone is the whole configuration.
+        break;
+    case psd_adjustment_none:
+        break;
+    }
+}
+
 void PsdAdditionalLayerInfoBlock::writeLfx2BlockEx(QIODevice &io, const QDomDocument &stylesXmlDoc, bool useLfxsLayerStyleFormat)
 {
     switch (m_header.byteOrder) {
