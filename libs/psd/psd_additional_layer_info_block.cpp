@@ -182,6 +182,44 @@ void PsdAdditionalLayerInfoBlock::readImpl(QIODevice &io)
                           << "; the layer will be imported as pixels";
             }
         } else if (key == "curv") {
+            // Curves: a flag byte, a version, then either a channel bitmap
+            // (version 1) or a plain count (version 4). Photoshop writes the
+            // composite curve first, and that is the only one Krita's
+            // per-channel filter can be handed wholesale, so the rest are
+            // left to the offset verifier to skip.
+            quint8 isMap;
+            quint16 curvesVersion;
+            quint32 countMap;
+            SAFE_READ_EX(byteOrder, io, isMap);
+            SAFE_READ_EX(byteOrder, io, curvesVersion);
+            SAFE_READ_EX(byteOrder, io, countMap);
+
+            if (isMap) {
+                // The 256-entry lookup form. Undocumented, and a lookup
+                // table is not a curve, so leave it to rasterise.
+                warnKrita << "WARNING: curves stored as a lookup map are not supported;"
+                          << "the layer will be imported as pixels";
+            } else if (curvesVersion != 1 && curvesVersion != 4) {
+                warnKrita << "WARNING: unsupported curves block version" << curvesVersion
+                          << "; the layer will be imported as pixels";
+            } else {
+                quint16 pointCount;
+                SAFE_READ_EX(byteOrder, io, pointCount);
+                // Photoshop's own limits; anything else means we have
+                // misread the block and should not build a curve from it.
+                if (pointCount >= 2 && pointCount <= 19) {
+                    for (quint16 i = 0; i < pointCount; i++) {
+                        psd_curve_point point;
+                        SAFE_READ_EX(byteOrder, io, point.output);
+                        SAFE_READ_EX(byteOrder, io, point.input);
+                        curvePoints.append(point);
+                    }
+                    adjustmentType = psd_adjustment_curves;
+                } else {
+                    warnKrita << "WARNING: curves block has an implausible point count"
+                              << pointCount << "; the layer will be imported as pixels";
+                }
+            }
         } else if (key == "expA") {
         } else if (key == "vibA") {
         } else if (key == "hue") {
@@ -456,14 +494,15 @@ void PsdAdditionalLayerInfoBlock::writeLsctBlockExImpl(QIODevice &io, psd_sectio
 void PsdAdditionalLayerInfoBlock::writeAdjustmentBlockEx(QIODevice &io,
                                                         psd_adjustment_type type,
                                                         quint16 value,
-                                                        const psd_levels_record &levels)
+                                                        const psd_levels_record &levels,
+                                                        const QVector<psd_curve_point> &curve)
 {
     switch (m_header.byteOrder) {
     case psd_byte_order::psdLittleEndian:
-        writeAdjustmentBlockExImpl<psd_byte_order::psdLittleEndian>(io, type, value, levels);
+        writeAdjustmentBlockExImpl<psd_byte_order::psdLittleEndian>(io, type, value, levels, curve);
         break;
     default:
-        writeAdjustmentBlockExImpl(io, type, value, levels);
+        writeAdjustmentBlockExImpl(io, type, value, levels, curve);
         break;
     }
 }
@@ -472,7 +511,8 @@ template<psd_byte_order byteOrder>
 void PsdAdditionalLayerInfoBlock::writeAdjustmentBlockExImpl(QIODevice &io,
                                                             psd_adjustment_type type,
                                                             quint16 value,
-                                                            const psd_levels_record &levels)
+                                                            const psd_levels_record &levels,
+                                                            const QVector<psd_curve_point> &curve)
 {
     if (type == psd_adjustment_none) {
         return;
@@ -492,6 +532,9 @@ void PsdAdditionalLayerInfoBlock::writeAdjustmentBlockExImpl(QIODevice &io,
         break;
     case psd_adjustment_threshold:
         KisAslWriterUtils::writeFixedString<byteOrder>("thrs", io);
+        break;
+    case psd_adjustment_curves:
+        KisAslWriterUtils::writeFixedString<byteOrder>("curv", io);
         break;
     case psd_adjustment_none:
         return;
@@ -525,6 +568,19 @@ void PsdAdditionalLayerInfoBlock::writeAdjustmentBlockExImpl(QIODevice &io,
         SAFE_WRITE_EX(byteOrder, io, value);
         SAFE_WRITE_EX(byteOrder, io, (quint16)0);
         break;
+    case psd_adjustment_curves: {
+        // Version 4 point form: not a lookup map, one curve (the composite),
+        // then its points written output-first.
+        SAFE_WRITE_EX(byteOrder, io, (quint8)0);
+        SAFE_WRITE_EX(byteOrder, io, (quint16)4);
+        SAFE_WRITE_EX(byteOrder, io, (quint32)1);
+        SAFE_WRITE_EX(byteOrder, io, (quint16)curve.size());
+        for (const psd_curve_point &point : curve) {
+            SAFE_WRITE_EX(byteOrder, io, point.output);
+            SAFE_WRITE_EX(byteOrder, io, point.input);
+        }
+        break;
+    }
     case psd_adjustment_invert:
         // No payload: the key alone is the whole configuration.
         break;

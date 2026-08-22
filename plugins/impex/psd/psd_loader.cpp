@@ -43,6 +43,7 @@
 #include <filter/kis_filter.h>
 #include <filter/kis_filter_configuration.h>
 #include <filter/kis_filter_registry.h>
+#include <kis_cubic_curve.h>
 #include <kis_guides_config.h>
 
 #include <kis_asl_layer_style_serializer.h>
@@ -74,7 +75,8 @@ namespace
  * layer before this existed.
  */
 KisFilterConfigurationSP psdAdjustmentConfiguration(const PsdAdditionalLayerInfoBlock &infoBlocks,
-                                                   KisResourcesInterfaceSP resourcesInterface)
+                                                   KisResourcesInterfaceSP resourcesInterface,
+                                                   const KoColorSpace *colorSpace)
 {
     QString filterId;
     switch (infoBlocks.adjustmentType) {
@@ -89,6 +91,9 @@ KisFilterConfigurationSP psdAdjustmentConfiguration(const PsdAdditionalLayerInfo
         break;
     case psd_adjustment_levels:
         filterId = "levels";
+        break;
+    case psd_adjustment_curves:
+        filterId = "perchannel";
         break;
     case psd_adjustment_none:
         return KisFilterConfigurationSP();
@@ -126,6 +131,32 @@ KisFilterConfigurationSP psdAdjustmentConfiguration(const PsdAdditionalLayerInfo
         // Photoshop stores gamma multiplied by 100. A zero would mean a
         // degenerate transfer function, so treat it as untouched.
         cfg->setProperty("gammavalue", levels.gamma > 0 ? static_cast<double>(levels.gamma) / 100.0 : 1.0);
+        break;
+    }
+    case psd_adjustment_curves: {
+        if (infoBlocks.curvePoints.size() < 2 || !colorSpace) {
+            return KisFilterConfigurationSP();
+        }
+        QList<QPointF> points;
+        for (const psd_curve_point &point : infoBlocks.curvePoints) {
+            points.append(QPointF(qBound(0.0, static_cast<double>(point.input) / 255.0, 1.0),
+                                  qBound(0.0, static_cast<double>(point.output) / 255.0, 1.0)));
+        }
+        const QString curveString = KisCubicCurve(points).toString();
+        const QString identity = KisCubicCurve().toString();
+
+        // nTransfers has to be set first: the per-channel config silently
+        // ignores a curveN whose index is beyond the current channel count.
+        const int channelCount = static_cast<int>(colorSpace->channelCount());
+        const int colorChannels = static_cast<int>(colorSpace->colorChannelCount());
+        cfg->setProperty("nTransfers", channelCount);
+
+        for (int i = 0; i < channelCount; i++) {
+            // Photoshop's composite curve applies to the colour channels
+            // only. Putting it on alpha as well would quietly rewrite the
+            // layer's transparency.
+            cfg->setProperty(QString("curve%1").arg(i), i < colorChannels ? curveString : identity);
+        }
         break;
     }
     case psd_adjustment_invert:
@@ -617,7 +648,7 @@ KisImportExportErrorCode PSDLoader::decode(QIODevice &io)
                 textLayer->addShape(shape);
                 layer = textLayer;
             } else if (KisFilterConfigurationSP adjustmentConfig =
-                           psdAdjustmentConfiguration(layerRecord->infoBlocks, resourceProxy.resourcesInterface())) {
+                           psdAdjustmentConfiguration(layerRecord->infoBlocks, resourceProxy.resourcesInterface(), m_image->colorSpace())) {
                 // An adjustment layer carries no pixels of its own, so like
                 // the fill and text branches above it never calls
                 // readPixelData. That is safe because channel data is read

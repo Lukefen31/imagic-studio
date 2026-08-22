@@ -27,6 +27,7 @@
 #include <KisImportExportErrorCode.h>
 #include <kis_generator_layer.h>
 #include <kis_adjustment_layer.h>
+#include <kis_cubic_curve.h>
 #include <kis_filter_configuration.h>
 #include <kis_transparency_mask.h>
 #include <kis_selection.h>
@@ -180,6 +181,7 @@ void KisPSDTest::testOpenAdjustmentLayers()
         {"PS Invert", "invert"},
         {"PS Posterize", "posterize"},
         {"PS Threshold", "threshold"},
+        {"PS Curves", "perchannel"},
     };
 
     for (const Expected &e : expected) {
@@ -217,6 +219,28 @@ void KisPSDTest::testOpenAdjustmentLayers()
     KisAdjustmentLayer *threshold = dynamic_cast<KisAdjustmentLayer *>(thresholdNode.data());
     QVERIFY(threshold);
     QCOMPARE(threshold->filter()->getInt("threshold", -1), 90);
+
+    // Curves: Photoshop stores points output-first in 0..255, so the S-curve
+    // (0,0) (80,64) (190,192) (255,255) has to arrive with x taken from the
+    // INPUT value and y from the output. Getting that backwards would still
+    // produce a valid-looking curve, just the wrong one.
+    KisNodeSP curvesNode = TestUtil::findNode(doc->image()->root(), "PS Curves");
+    KisAdjustmentLayer *curves = dynamic_cast<KisAdjustmentLayer *>(curvesNode.data());
+    QVERIFY(curves);
+    KisFilterConfigurationSP curvesConfig = curves->filter();
+    QCOMPARE(curvesConfig->name(), QString("perchannel"));
+
+    const KisCubicCurve curve(curvesConfig->getString("curve0"));
+    QCOMPARE(curve.curvePoints().size(), 4);
+    QVERIFY(qAbs(curve.curvePoints()[1].x() - 64.0 / 255.0) < 0.01);
+    QVERIFY(qAbs(curve.curvePoints()[1].y() - 80.0 / 255.0) < 0.01);
+
+    // The composite curve must not be applied to alpha, or the layer's
+    // transparency is quietly rewritten.
+    const int channels = curvesConfig->getInt("nTransfers", 0);
+    QVERIFY(channels >= 2);
+    const KisCubicCurve alphaCurve(curvesConfig->getString(QString("curve%1").arg(channels - 1)));
+    QCOMPARE(alphaCurve.curvePoints().size(), 2);
 }
 
 void KisPSDTest::testRoundTripAdjustmentLayers()
@@ -277,6 +301,17 @@ void KisPSDTest::testRoundTripAdjustmentLayers()
     KisAdjustmentLayer *threshold = dynamic_cast<KisAdjustmentLayer *>(thresholdNode.data());
     QVERIFY(threshold);
     QCOMPARE(threshold->filter()->getInt("threshold", -1), 90);
+
+    // Curves has to survive too, or exporting would bake it into pixels and
+    // write an opaque layer over everything beneath it.
+    KisNodeSP curvesNode = TestUtil::findNode(reloaded->image()->root(), "PS Curves");
+    QVERIFY(curvesNode);
+    KisAdjustmentLayer *curves = dynamic_cast<KisAdjustmentLayer *>(curvesNode.data());
+    QVERIFY2(curves, "curves layer came back as pixels, so export baked it in");
+    const KisCubicCurve roundTripped(curves->filter()->getString("curve0"));
+    QCOMPARE(roundTripped.curvePoints().size(), 4);
+    QVERIFY(qAbs(roundTripped.curvePoints()[1].x() - 64.0 / 255.0) < 0.01);
+    QVERIFY(qAbs(roundTripped.curvePoints()[1].y() - 80.0 / 255.0) < 0.01);
 }
 
 void KisPSDTest::testOpenLayerStyles()

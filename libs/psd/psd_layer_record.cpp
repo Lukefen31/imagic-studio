@@ -686,7 +686,7 @@ void PSDLayerRecord::writeImpl(QIODevice &io,
             }
 
             if (adjustmentType != psd_adjustment_none) {
-                additionalInfoBlock.writeAdjustmentBlockEx(io, adjustmentType, adjustmentValue, adjustmentLevels);
+                additionalInfoBlock.writeAdjustmentBlockEx(io, adjustmentType, adjustmentValue, adjustmentLevels, adjustmentCurvePoints);
             }
 
             // write 'vmsk' data block

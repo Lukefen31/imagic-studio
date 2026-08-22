@@ -18,6 +18,17 @@ LEVELS = dict(input_floor=20, input_ceiling=200, output_floor=10,
               output_ceiling=240, gamma=150)   # gamma 1.50
 POSTERIZE_STEPS = 7
 THRESHOLD_LEVEL = 90
+# Composite curve: a gentle S, stored output-first in 0..255.
+CURVE_POINTS = [(0, 0), (80, 64), (190, 192), (255, 255)]
+
+
+def curves_block() -> bytes:
+    """Version 4 point form: flag, version, count, then one curve."""
+    out = struct.pack(">BHI", 0, 4, 1)
+    out += struct.pack(">H", len(CURVE_POINTS))
+    for output, inp in CURVE_POINTS:
+        out += struct.pack(">2H", output, inp)
+    return out
 
 
 def levels_block() -> bytes:
@@ -34,7 +45,7 @@ li = psd.layer_and_mask_information.layer_info
 
 # Only two plain paint layers exist in the source; clone one to get four.
 template_idx = 2
-while len(li.layer_records) < 7:
+while len(li.layer_records) < 8:
     li.layer_records.append(copy.deepcopy(li.layer_records[template_idx]))
     li.channel_image_data.append(copy.deepcopy(li.channel_image_data[template_idx]))
 li.layer_count = -len(li.layer_records)
@@ -54,6 +65,7 @@ put(2, "PS Levels",    Tag.LEVELS,    levels_block())
 put(3, "PS Invert",    Tag.INVERT,    b"")
 put(5, "PS Posterize", Tag.POSTERIZE, struct.pack(">H2x", POSTERIZE_STEPS))
 put(6, "PS Threshold", Tag.THRESHOLD, struct.pack(">H2x", THRESHOLD_LEVEL))
+put(7, "PS Curves",    Tag.CURVES,    curves_block())
 
 with open(OUT, "wb") as fp:
     psd.write(fp)

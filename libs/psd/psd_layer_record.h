@@ -142,6 +142,7 @@ public:
     psd_adjustment_type adjustmentType {psd_adjustment_none};
     quint16 adjustmentValue {0};
     psd_levels_record adjustmentLevels;
+    QVector<psd_curve_point> adjustmentCurvePoints;
 
     psd_vector_mask vectorMask;
     psd_layer_type_shape textShape;

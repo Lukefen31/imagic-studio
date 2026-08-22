@@ -1357,6 +1357,18 @@ enum psd_adjustment_type {
     psd_adjustment_posterize,
     psd_adjustment_threshold,
     psd_adjustment_levels,
+    psd_adjustment_curves,
+};
+
+/**
+ * One point of a Photoshop curves block.
+ *
+ * Stored output-first, which is the opposite order to how a
+ * curve is usually written down, and both values are 0..255.
+ */
+struct psd_curve_point {
+    quint16 output{0};
+    quint16 input{0};
 };
 
 /**
@@ -1414,7 +1426,7 @@ public:
      * layer is exported as its own projection, which bakes the effect
      * into pixels and loses the layer.
      */
-    void writeAdjustmentBlockEx(QIODevice &io, psd_adjustment_type type, quint16 value, const psd_levels_record &levels);
+    void writeAdjustmentBlockEx(QIODevice &io, psd_adjustment_type type, quint16 value, const psd_levels_record &levels, const QVector<psd_curve_point> &curve);
     void writeVmskBlockEx(QIODevice &io, psd_vector_mask mask);
     void writeTypeToolBlockEx(QIODevice &io, psd_layer_type_shape typeTool);
     void writeVectorStrokeDataEx(QIODevice &io, const QDomDocument &vectorStroke);
@@ -1441,6 +1453,7 @@ public:
     psd_adjustment_type adjustmentType {psd_adjustment_none};
     quint16 adjustmentValue {0}; // posterize steps, or threshold level
     psd_levels_record levels;
+    QVector<psd_curve_point> curvePoints; // composite curve only
 
     QTransform textTransform;
     QDomDocument textData;
@@ -1475,7 +1488,7 @@ private:
     void writeFillLayerBlockExImpl(QIODevice &io, const QDomDocument &fillConfig, psd_fill_type type);
 
     template<psd_byte_order byteOrder = psd_byte_order::psdBigEndian>
-    void writeAdjustmentBlockExImpl(QIODevice &io, psd_adjustment_type type, quint16 value, const psd_levels_record &levels);
+    void writeAdjustmentBlockExImpl(QIODevice &io, psd_adjustment_type type, quint16 value, const psd_levels_record &levels, const QVector<psd_curve_point> &curve);
 
     template<psd_byte_order byteOrder = psd_byte_order::psdBigEndian>
     void writeVectorMaskImpl(QIODevice &io, psd_vector_mask mask);

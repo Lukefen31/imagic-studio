@@ -17,6 +17,7 @@
 #include <kis_group_layer.h>
 #include <kis_generator_layer.h>
 #include <kis_adjustment_layer.h>
+#include <kis_cubic_curve.h>
 #include <kis_paint_device.h>
 #include <filter/kis_filter_configuration.h>
 #include <kis_image.h>
@@ -690,6 +691,7 @@ void PSDLayerMaskSection::writePsdImpl(QIODevice &io, KisNodeSP rootLayer, psd_c
                 psd_adjustment_type adjustmentType = psd_adjustment_none;
                 quint16 adjustmentValue = 0;
                 psd_levels_record adjustmentLevels;
+                QVector<psd_curve_point> adjustmentCurvePoints;
                 if (adjustmentLayer && adjustmentLayer->filter()) {
                     KisFilterConfigurationSP filterConfig = adjustmentLayer->filter();
                     const QString filterName = filterConfig->name();
@@ -714,6 +716,22 @@ void PSDLayerMaskSection::writePsdImpl(QIODevice &io, KisNodeSP rootLayer, psd_c
                     } else if (filterName == "threshold") {
                         adjustmentValue = static_cast<quint16>(qBound(0, filterConfig->getInt("threshold", 128), 255));
                         adjustmentType = psd_adjustment_threshold;
+                    } else if (filterName == "perchannel") {
+                        // Only the first colour channel's curve survives the
+                        // trip: Photoshop's composite curve is one curve, and
+                        // that is what import puts on every colour channel.
+                        const KisCubicCurve curve(filterConfig->getString("curve0"));
+                        const QList<KisCubicCurvePoint> &points = curve.curvePoints();
+                        // Photoshop refuses anything outside 2..19 points.
+                        if (points.size() >= 2 && points.size() <= 19) {
+                            for (const KisCubicCurvePoint &point : points) {
+                                psd_curve_point stored;
+                                stored.input = static_cast<quint16>(qBound(0, qRound(point.x() * 255.0), 255));
+                                stored.output = static_cast<quint16>(qBound(0, qRound(point.y() * 255.0), 255));
+                                adjustmentCurvePoints.append(stored);
+                            }
+                            adjustmentType = psd_adjustment_curves;
+                        }
                     }
                 }
 
@@ -1016,6 +1034,7 @@ void PSDLayerMaskSection::writePsdImpl(QIODevice &io, KisNodeSP rootLayer, psd_c
                 layerRecord->adjustmentType = adjustmentType;
                 layerRecord->adjustmentValue = adjustmentValue;
                 layerRecord->adjustmentLevels = adjustmentLevels;
+                layerRecord->adjustmentCurvePoints = adjustmentCurvePoints;
 
                 layerRecord->vectorMask = vectorMask;
                 layerRecord->vectorStroke = strokeData;
