@@ -163,15 +163,28 @@ jobs:
         # kis_psd_test carries dozens of pre-existing functions. Running
         # ours by name is the only way to tell "our code is broken" apart
         # from "something else in this suite was already failing".
+        #
+        # QTest's -o writes results straight to a file. That matters here:
+        # Krita's test binaries are GUI-subsystem executables on Windows, so
+        # their stdout never reaches ctest, which is why -VV captured nothing
+        # at all for a test that ran for 20 seconds.
         if: always()
         shell: cmd
         run: |
           call ci-env.bat
-          for /r _build %%f in (kis_psd_test.exe) do set PSDTEST=%%f
-          echo Using %PSDTEST%
-          "%PSDTEST%" testOpenAdjustmentLayers testRoundTripAdjustmentLayers > ctest-adjustments.log 2>&1
+          set PSDTEST=_build\bin\kis_psd_test.exe
+          dir %PSDTEST%
+
+          rem Everything, to see what was already failing before this branch.
+          %PSDTEST% -o full-suite.txt,txt
+          echo ---- full kis_psd_test results ----
+          type full-suite.txt
+
+          rem Then just ours, which is the actual verdict on this change.
+          %PSDTEST% -o adjustments.txt,txt testOpenAdjustmentLayers testRoundTripAdjustmentLayers
           set OUR_EXIT=%ERRORLEVEL%
-          type ctest-adjustments.log
+          echo ---- adjustment-layer results ----
+          type adjustments.txt
           exit /b %OUR_EXIT%
 
       - name: Upload logs
@@ -182,5 +195,6 @@ jobs:
           path: |
             build-tests.log
             ctest-psd.log
-            ctest-adjustments.log
+            full-suite.txt
+            adjustments.txt
           if-no-files-found: warn
