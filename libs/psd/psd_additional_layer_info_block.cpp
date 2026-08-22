@@ -112,8 +112,17 @@ void PsdAdditionalLayerInfoBlock::readImpl(QIODevice &io)
 
         dbgFile << "info block size" << blockSize << "(" << io.pos() << ")";
 
-        if (blockSize == 0)
+        if (blockSize == 0) {
+            // A zero-length block never reaches the key dispatch below, and
+            // Invert is exactly that: the key IS the whole configuration, so
+            // Photoshop writes it with no payload at all. Without this it is
+            // silently skipped and the layer imports as pixels.
+            if (key == "nvrt" && !keys.contains(key)) {
+                keys << key;
+                adjustmentType = psd_adjustment_invert;
+            }
             continue;
+        }
 
         // offset verifier will correct the position on the exit from
         // current namespace, including 'continue', 'return' and

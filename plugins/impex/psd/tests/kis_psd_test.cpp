@@ -235,7 +235,14 @@ void KisPSDTest::testRoundTripAdjustmentLayers()
     roundTrip.open();
     roundTrip.close();
 
-    QVERIFY(doc->exportDocumentSync(roundTrip.fileName(), "image/vnd.adobe.photoshop"));
+    const bool exported = doc->exportDocumentSync(roundTrip.fileName(), "image/vnd.adobe.photoshop");
+    if (!exported) {
+        // exportDocumentSync just returns false; the reason lives on the
+        // document, and without it the failure says nothing actionable.
+        qWarning() << "PSD export refused:" << doc->errorMessage()
+                   << "target:" << roundTrip.fileName();
+    }
+    QVERIFY2(exported, qPrintable(doc->errorMessage()));
 
     QSharedPointer<KisDocument> reloaded = openPsdDocument(QFileInfo(roundTrip.fileName()));
     QVERIFY(reloaded->image());
