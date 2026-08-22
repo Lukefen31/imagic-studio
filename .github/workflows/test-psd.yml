@@ -126,7 +126,15 @@ jobs:
           $env:CI_COMMIT_SHORT_SHA = $env:CI_COMMIT_SHORT_SHA.Substring(0, 8)
           python -u krita-deps-management/tools/replace-branch-in-seed-file.py krita-deps-management/latest/krita-deps.yml -p -o branch-corrected-deps.yml -d master
           python -u krita-deps-management/tools/generate-deps-file.py -s branch-corrected-deps.yml -o .kde-ci.yml
-          python -u krita-deps-management/ci-utilities/run-ci-build.py --project $env:CI_PROJECT_NAME --branch $env:CI_COMMIT_REF_NAME --platform Windows/Qt5/Shared --skip-publishing 2>&1 | Tee-Object -FilePath "build-tests.log"
+          # --only-build is load-bearing. run-ci-build.py computes
+          #   run_tests = run-tests AND build-tests AND NOT only_build
+          # so BUILD_TESTING=ON otherwise makes it run KRITA'S ENTIRE test
+          # suite, GUI and OpenGL tests included, on a headless runner. Two
+          # attempts died at ~1h40m with 'the hosted runner lost
+          # communication' and no logs, because the process that uploads the
+          # logs was the one being killed. We only ever wanted the PSD tests,
+          # which the next step runs explicitly.
+          python -u krita-deps-management/ci-utilities/run-ci-build.py --project $env:CI_PROJECT_NAME --branch $env:CI_COMMIT_REF_NAME --platform Windows/Qt5/Shared --skip-publishing --only-build 2>&1 | Tee-Object -FilePath "build-tests.log"
 
       - name: Report runner resources after build
         if: always()
@@ -134,7 +142,9 @@ jobs:
 
       - name: Run the PSD tests
         run: |
-          ctest --test-dir _build -R "psd" --output-on-failure 2>&1 | Tee-Object -FilePath "ctest-psd.log"
+          # Per-test timeout so a hung test fails this step instead of
+          # taking the whole runner down with it.
+          ctest --test-dir _build -R "psd" --output-on-failure --timeout 600 2>&1 | Tee-Object -FilePath "ctest-psd.log"
 
       - name: Upload logs
         if: always()
