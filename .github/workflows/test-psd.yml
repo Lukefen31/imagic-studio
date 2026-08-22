@@ -151,10 +151,28 @@ jobs:
           rem in 0.01s, having never actually started.
           rem Per-test timeout so a hung test fails this step rather than
           rem taking the whole runner down with it.
-          ctest --test-dir _build -R "psd" --output-on-failure --timeout 600 > ctest-psd.log 2>&1
+          rem -VV, not --output-on-failure: the latter printed nothing at all
+          rem for a test that ran 26s and failed, which left no way to tell
+          rem which assertion broke.
+          ctest --test-dir _build -R "psd" -VV --timeout 600 > ctest-psd.log 2>&1
           set CTEST_EXIT=%ERRORLEVEL%
           type ctest-psd.log
           exit /b %CTEST_EXIT%
+
+      - name: Run only the adjustment-layer tests
+        # kis_psd_test carries dozens of pre-existing functions. Running
+        # ours by name is the only way to tell "our code is broken" apart
+        # from "something else in this suite was already failing".
+        if: always()
+        shell: cmd
+        run: |
+          call ci-env.bat
+          for /r _build %%f in (kis_psd_test.exe) do set PSDTEST=%%f
+          echo Using %PSDTEST%
+          "%PSDTEST%" testOpenAdjustmentLayers testRoundTripAdjustmentLayers > ctest-adjustments.log 2>&1
+          set OUR_EXIT=%ERRORLEVEL%
+          type ctest-adjustments.log
+          exit /b %OUR_EXIT%
 
       - name: Upload logs
         if: always()
@@ -164,4 +182,5 @@ jobs:
           path: |
             build-tests.log
             ctest-psd.log
+            ctest-adjustments.log
           if-no-files-found: warn
