@@ -170,7 +170,10 @@ void KisPSDTest::testOpenAdjustmentLayers()
     Q_ASSERT(sourceFileInfo.exists());
 
     QSharedPointer<KisDocument> doc = openPsdDocument(sourceFileInfo);
-    QVERIFY(doc->image());
+    if (!doc->image()) {
+        qWarning() << "adjustment fixture failed to load:" << doc->errorMessage();
+    }
+    QVERIFY2(doc->image(), qPrintable(doc->errorMessage()));
 
     struct Expected {
         const char *layerName;
@@ -253,7 +256,10 @@ void KisPSDTest::testRoundTripAdjustmentLayers()
     Q_ASSERT(sourceFileInfo.exists());
 
     QSharedPointer<KisDocument> doc = openPsdDocument(sourceFileInfo);
-    QVERIFY(doc->image());
+    if (!doc->image()) {
+        qWarning() << "adjustment fixture failed to load:" << doc->errorMessage();
+    }
+    QVERIFY2(doc->image(), qPrintable(doc->errorMessage()));
 
     // Batch mode and an explicit mime type are both required: without them
     // the exporter tries to prompt and declines, returning false with an

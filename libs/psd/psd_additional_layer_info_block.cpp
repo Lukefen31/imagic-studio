@@ -187,6 +187,17 @@ void PsdAdditionalLayerInfoBlock::readImpl(QIODevice &io)
             // composite curve first, and that is the only one Krita's
             // per-channel filter can be handed wholesale, so the rest are
             // left to the offset verifier to skip.
+            // Bounds-checked against the declared block size throughout. A
+            // malformed adjustment block must degrade to "import as pixels",
+            // never to an unopenable file: SAFE_READ_EX throws, and a throw
+            // here fails the entire layer section.
+            const quint64 curvesHeaderSize = 9; // flag + version + count + point count
+            if (blockSize < curvesHeaderSize) {
+                warnKrita << "WARNING: curves block is too small" << blockSize
+                          << "; the layer will be imported as pixels";
+                continue;
+            }
+
             quint8 isMap;
             quint16 curvesVersion;
             quint32 countMap;
@@ -207,7 +218,8 @@ void PsdAdditionalLayerInfoBlock::readImpl(QIODevice &io)
                 SAFE_READ_EX(byteOrder, io, pointCount);
                 // Photoshop's own limits; anything else means we have
                 // misread the block and should not build a curve from it.
-                if (pointCount >= 2 && pointCount <= 19) {
+                if (pointCount >= 2 && pointCount <= 19
+                    && blockSize >= curvesHeaderSize + static_cast<quint64>(pointCount) * 4) {
                     for (quint16 i = 0; i < pointCount; i++) {
                         psd_curve_point point;
                         SAFE_READ_EX(byteOrder, io, point.output);
