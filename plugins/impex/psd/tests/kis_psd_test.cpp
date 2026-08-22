@@ -231,20 +231,22 @@ void KisPSDTest::testRoundTripAdjustmentLayers()
     QSharedPointer<KisDocument> doc = openPsdDocument(sourceFileInfo);
     QVERIFY(doc->image());
 
-    QTemporaryFile roundTrip(QDir::tempPath() + QLatin1String("/krita_psd_adjustments_XXXXXX.psd"));
-    roundTrip.open();
-    roundTrip.close();
+    // Batch mode and an explicit mime type are both required: without them
+    // the exporter tries to prompt and declines, returning false with an
+    // empty errorMessage(). Every passing export test in this file does
+    // this first.
+    doc->setFileBatchMode(true);
+    doc->setMimeType("image/vnd.adobe.photoshop");
 
-    const bool exported = doc->exportDocumentSync(roundTrip.fileName(), "image/vnd.adobe.photoshop");
+    QFileInfo roundTripInfo(QDir::currentPath() + QLatin1String("/test_adjustment_layers.psd"));
+    const bool exported = doc->exportDocumentSync(roundTripInfo.absoluteFilePath(), "image/vnd.adobe.photoshop");
     if (!exported) {
-        // exportDocumentSync just returns false; the reason lives on the
-        // document, and without it the failure says nothing actionable.
         qWarning() << "PSD export refused:" << doc->errorMessage()
-                   << "target:" << roundTrip.fileName();
+                   << "target:" << roundTripInfo.absoluteFilePath();
     }
     QVERIFY2(exported, qPrintable(doc->errorMessage()));
 
-    QSharedPointer<KisDocument> reloaded = openPsdDocument(QFileInfo(roundTrip.fileName()));
+    QSharedPointer<KisDocument> reloaded = openPsdDocument(roundTripInfo);
     QVERIFY(reloaded->image());
 
     // Same four layers, still adjustments, still carrying their values.
