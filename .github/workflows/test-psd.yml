@@ -134,17 +134,27 @@ jobs:
           # communication' and no logs, because the process that uploads the
           # logs was the one being killed. We only ever wanted the PSD tests,
           # which the next step runs explicitly.
-          python -u krita-deps-management/ci-utilities/run-ci-build.py --project $env:CI_PROJECT_NAME --branch $env:CI_COMMIT_REF_NAME --platform Windows/Qt5/Shared --skip-publishing --only-build 2>&1 | Tee-Object -FilePath "build-tests.log"
+          python -u krita-deps-management/ci-utilities/run-ci-build.py --project $env:CI_PROJECT_NAME --branch $env:CI_COMMIT_REF_NAME --platform Windows/Qt5/Shared --skip-publishing --only-build --env ci-env 2>&1 | Tee-Object -FilePath "build-tests.log"
 
       - name: Report runner resources after build
         if: always()
         run: Get-PSDrive C | Select-Object Used,Free
 
       - name: Run the PSD tests
+        # cmd, not pwsh: the KDE build script writes its environment as a
+        # Windows .bat of "set VAR=value" lines, and calling it is the
+        # supported way to inherit the PATH the built binaries need.
+        shell: cmd
         run: |
-          # Per-test timeout so a hung test fails this step instead of
-          # taking the whole runner down with it.
-          ctest --test-dir _build -R "psd" --output-on-failure --timeout 600 2>&1 | Tee-Object -FilePath "ctest-psd.log"
+          call ci-env.bat
+          rem Without that PATH every test exits 0xc0000135 (DLL not found)
+          rem in 0.01s, having never actually started.
+          rem Per-test timeout so a hung test fails this step rather than
+          rem taking the whole runner down with it.
+          ctest --test-dir _build -R "psd" --output-on-failure --timeout 600 > ctest-psd.log 2>&1
+          set CTEST_EXIT=%ERRORLEVEL%
+          type ctest-psd.log
+          exit /b %CTEST_EXIT%
 
       - name: Upload logs
         if: always()
