@@ -36,12 +36,12 @@ ManifestDPIAware false
 !else
 	!define KRITA_INSTALLER_OUTPUT "${KRITA_INSTALLER_OUTPUT_DIR}\${KRITA_INSTALLER_OUTPUT_NAME}"
 !endif
-!define KRTIA_PUBLISHER "Krita Foundation"
+!define KRTIA_PUBLISHER "imagic"
 !ifdef KRITA_INSTALLER_64
-	!define KRITA_PRODUCTNAME "Krita (x64)"
+	!define KRITA_PRODUCTNAME "imagic studio (x64)"
 	!define KRITA_UNINSTALL_REGKEY "Krita_x64"
 !else
-	!define KRITA_PRODUCTNAME "Krita (x86)"
+	!define KRITA_PRODUCTNAME "imagic studio (x86)"
 	!define KRITA_UNINSTALL_REGKEY "Krita_x86"
 !endif
 
@@ -60,9 +60,9 @@ BrandingText "[NSIS ${NSIS_VERSION}]  ${KRITA_PRODUCTNAME} ${KRITA_VERSION}"
 Name "${KRITA_PRODUCTNAME} ${KRITA_VERSION_DISPLAY}"
 OutFile ${KRITA_INSTALLER_OUTPUT}
 !ifdef KRITA_INSTALLER_64
-	InstallDir "$PROGRAMFILES64\Krita (x64)"
+	InstallDir "$PROGRAMFILES64\imagic studio (x64)"
 !else
-	InstallDir "$PROGRAMFILES32\Krita (x86)"
+	InstallDir "$PROGRAMFILES32\imagic studio (x86)"
 !endif
 XPstyle on
 
@@ -85,7 +85,7 @@ Var CreateDesktopIcon
 !define MUI_PAGE_CUSTOMFUNCTION_PRE  func_ShellExLicensePage_Init
 !define MUI_PAGE_HEADER_TEXT "$(ShellExLicensePageHeader)"
 !insertmacro MUI_PAGE_LICENSE "license.rtf"
-!define MUI_STARTMENUPAGE_DEFAULTFOLDER "Krita"
+!define MUI_STARTMENUPAGE_DEFAULTFOLDER "imagic studio"
 !define MUI_STARTMENUPAGE_REGISTRY_ROOT HKLM
 !define MUI_STARTMENUPAGE_REGISTRY_KEY "Software\Krita"
 !define MUI_STARTMENUPAGE_REGISTRY_VALUENAME "StartMenuFolder"
@@ -193,7 +193,7 @@ Section "-Thing"
 	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${KRITA_UNINSTALL_REGKEY}" \
 	                 "DisplayIcon" "$\"$INSTDIR\shellex\krita.ico$\",0"
 	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${KRITA_UNINSTALL_REGKEY}" \
-	                 "URLInfoAbout" "https://krita.org/"
+	                 "URLInfoAbout" "https://imagic.ink/"
 	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${KRITA_UNINSTALL_REGKEY}" \
 	                 "InstallLocation" "$INSTDIR"
 	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${KRITA_UNINSTALL_REGKEY}" \
@@ -251,7 +251,7 @@ Section "-Main_Shortcuts"
 	!insertmacro MUI_STARTMENU_WRITE_END
 	${If} $CreateDesktopIcon == 1
 		# For the desktop icon, keep the name short and omit version info
-		CreateShortcut "$DESKTOP\Krita.lnk" "$INSTDIR\bin\krita.exe" "" "$INSTDIR\shellex\krita.ico" 0
+		CreateShortcut "$DESKTOP\imagic studio.lnk" "$INSTDIR\bin\krita.exe" "" "$INSTDIR\shellex\krita.ico" 0
 	${EndIf}
 SectionEnd
 
@@ -346,7 +346,7 @@ Section "un.Main_associate"
 SectionEnd
 
 Section "un.Main_Shortcuts"
-	Delete "$DESKTOP\Krita.lnk"
+	Delete "$DESKTOP\imagic studio.lnk"
 	!insertmacro MUI_STARTMENU_GETFOLDER Krita $KritaStartMenuFolder
 	Delete "$SMPROGRAMS\$KritaStartMenuFolder\${KRITA_PRODUCTNAME}.lnk"
 	RMDir "$SMPROGRAMS\$KritaStartMenuFolder"
