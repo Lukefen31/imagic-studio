@@ -1342,6 +1342,45 @@ struct psd_vector_origination_data {
 };
 
 /**
+ * Photoshop adjustment layers that we can turn into a Krita filter layer.
+ *
+ * Photoshop has sixteen adjustment types; the ones listed here are those
+ * whose stored parameters map onto a filter Krita already ships, so the
+ * import is a translation rather than new imaging code. The remaining keys
+ * are still recognised by the reader and skipped, exactly as before, which
+ * means an unsupported adjustment degrades to a flattened pixel layer
+ * instead of breaking the file.
+ */
+enum psd_adjustment_type {
+    psd_adjustment_none = 0,
+    psd_adjustment_invert,
+    psd_adjustment_posterize,
+    psd_adjustment_threshold,
+    psd_adjustment_levels,
+};
+
+/**
+ * One record of a Photoshop "levl" block.
+ *
+ * Photoshop stores five 16-bit values per channel and scales gamma by 100.
+ * Krita's levels filter takes the same five numbers, with input and output
+ * points in 0..255 and gamma as a real, so the conversion is arithmetic
+ * only. Record 0 is the composite channel.
+ */
+struct psd_levels_record {
+    quint16 inputFloor{0};
+    quint16 inputCeiling{255};
+    quint16 outputFloor{0};
+    quint16 outputCeiling{255};
+    quint16 gamma{100};
+
+    bool isIdentity() const
+    {
+        return inputFloor == 0 && inputCeiling == 255 && outputFloor == 0 && outputCeiling == 255 && gamma == 100;
+    }
+};
+
+/**
  * @brief The PsdAdditionalLayerInfoBlock class implements the Additional Layer Information block
  *
  * See: https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/#50577409_71546
@@ -1367,6 +1406,15 @@ public:
     void writeLclrBlockEx(QIODevice &io, const quint16 &labelColor);
 
     void writeFillLayerBlockEx(QIODevice &io, const QDomDocument &fillConfig, psd_fill_type type);
+
+    /**
+     * Write one adjustment-layer block (levl / nvrt / post / thrs).
+     *
+     * The counterpart of the read branches: without this an adjustment
+     * layer is exported as its own projection, which bakes the effect
+     * into pixels and loses the layer.
+     */
+    void writeAdjustmentBlockEx(QIODevice &io, psd_adjustment_type type, quint16 value, const psd_levels_record &levels);
     void writeVmskBlockEx(QIODevice &io, psd_vector_mask mask);
     void writeTypeToolBlockEx(QIODevice &io, psd_layer_type_shape typeTool);
     void writeVectorStrokeDataEx(QIODevice &io, const QDomDocument &vectorStroke);
@@ -1389,6 +1437,10 @@ public:
 
     QDomDocument fillConfig;
     psd_fill_type fillType {psd_fill_solid_color};
+
+    psd_adjustment_type adjustmentType {psd_adjustment_none};
+    quint16 adjustmentValue {0}; // posterize steps, or threshold level
+    psd_levels_record levels;
 
     QTransform textTransform;
     QDomDocument textData;
@@ -1421,6 +1473,9 @@ private:
 
     template<psd_byte_order byteOrder = psd_byte_order::psdBigEndian>
     void writeFillLayerBlockExImpl(QIODevice &io, const QDomDocument &fillConfig, psd_fill_type type);
+
+    template<psd_byte_order byteOrder = psd_byte_order::psdBigEndian>
+    void writeAdjustmentBlockExImpl(QIODevice &io, psd_adjustment_type type, quint16 value, const psd_levels_record &levels);
 
     template<psd_byte_order byteOrder = psd_byte_order::psdBigEndian>
     void writeVectorMaskImpl(QIODevice &io, psd_vector_mask mask);

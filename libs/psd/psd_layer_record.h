@@ -136,6 +136,13 @@ public:
     psd_fill_type fillType {psd_fill_solid_color};
     QDomDocument fillConfig;
 
+    // Set for a KisAdjustmentLayer so write() can emit the matching
+    // levl / nvrt / post / thrs block instead of baking the filter into
+    // the layer's pixels.
+    psd_adjustment_type adjustmentType {psd_adjustment_none};
+    quint16 adjustmentValue {0};
+    psd_levels_record adjustmentLevels;
+
     psd_vector_mask vectorMask;
     psd_layer_type_shape textShape;
     QDomDocument vectorStroke;

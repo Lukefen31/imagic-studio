@@ -112,8 +112,17 @@ void PsdAdditionalLayerInfoBlock::readImpl(QIODevice &io)
 
         dbgFile << "info block size" << blockSize << "(" << io.pos() << ")";
 
-        if (blockSize == 0)
+        if (blockSize == 0) {
+            // A zero-length block never reaches the key dispatch below, and
+            // Invert is exactly that: the key IS the whole configuration, so
+            // Photoshop writes it with no payload at all. Without this it is
+            // silently skipped and the layer imports as pixels.
+            if (key == "nvrt" && !keys.contains(key)) {
+                keys << key;
+                adjustmentType = psd_adjustment_invert;
+            }
             continue;
+        }
 
         // offset verifier will correct the position on the exit from
         // current namespace, including 'continue', 'return' and
@@ -155,6 +164,23 @@ void PsdAdditionalLayerInfoBlock::readImpl(QIODevice &io)
             fillType = psd_fill_pattern;
         } else if (key == "brit") {
         } else if (key == "levl") {
+            // Levels. Version, then 29 fixed-size channel records. Record 0
+            // is the composite channel, which is what Krita's levels filter
+            // adjusts in its default lightness mode; the per-channel records
+            // after it are left to the offset verifier to skip.
+            quint16 levelsVersion;
+            SAFE_READ_EX(byteOrder, io, levelsVersion);
+            if (levelsVersion == 2) {
+                SAFE_READ_EX(byteOrder, io, levels.inputFloor);
+                SAFE_READ_EX(byteOrder, io, levels.inputCeiling);
+                SAFE_READ_EX(byteOrder, io, levels.outputFloor);
+                SAFE_READ_EX(byteOrder, io, levels.outputCeiling);
+                SAFE_READ_EX(byteOrder, io, levels.gamma);
+                adjustmentType = psd_adjustment_levels;
+            } else {
+                warnKrita << "WARNING: unsupported levels block version" << levelsVersion
+                          << "; the layer will be imported as pixels";
+            }
         } else if (key == "curv") {
         } else if (key == "expA") {
         } else if (key == "vibA") {
@@ -166,8 +192,15 @@ void PsdAdditionalLayerInfoBlock::readImpl(QIODevice &io)
         } else if (key == "mixr") {
         } else if (key == "clrL") {
         } else if (key == "nvrt") {
+            // Invert takes no parameters: the key itself is the whole
+            // configuration.
+            adjustmentType = psd_adjustment_invert;
         } else if (key == "post") {
+            SAFE_READ_EX(byteOrder, io, adjustmentValue);
+            adjustmentType = psd_adjustment_posterize;
         } else if (key == "thrs") {
+            SAFE_READ_EX(byteOrder, io, adjustmentValue);
+            adjustmentType = psd_adjustment_threshold;
         } else if (key == "selc") {
         } else if (key == "lrFX") {
             // deprecated! use lfx2 instead!
@@ -418,6 +451,86 @@ void PsdAdditionalLayerInfoBlock::writeLsctBlockExImpl(QIODevice &io, psd_sectio
 
     KisAslWriterUtils::writeFixedString<byteOrder>("8BIM", io);
     KisAslWriterUtils::writeFixedString<byteOrder>(realBlendModeKey, io);
+}
+
+void PsdAdditionalLayerInfoBlock::writeAdjustmentBlockEx(QIODevice &io,
+                                                        psd_adjustment_type type,
+                                                        quint16 value,
+                                                        const psd_levels_record &levels)
+{
+    switch (m_header.byteOrder) {
+    case psd_byte_order::psdLittleEndian:
+        writeAdjustmentBlockExImpl<psd_byte_order::psdLittleEndian>(io, type, value, levels);
+        break;
+    default:
+        writeAdjustmentBlockExImpl(io, type, value, levels);
+        break;
+    }
+}
+
+template<psd_byte_order byteOrder>
+void PsdAdditionalLayerInfoBlock::writeAdjustmentBlockExImpl(QIODevice &io,
+                                                            psd_adjustment_type type,
+                                                            quint16 value,
+                                                            const psd_levels_record &levels)
+{
+    if (type == psd_adjustment_none) {
+        return;
+    }
+
+    KisAslWriterUtils::writeFixedString<byteOrder>("8BIM", io);
+
+    switch (type) {
+    case psd_adjustment_levels:
+        KisAslWriterUtils::writeFixedString<byteOrder>("levl", io);
+        break;
+    case psd_adjustment_invert:
+        KisAslWriterUtils::writeFixedString<byteOrder>("nvrt", io);
+        break;
+    case psd_adjustment_posterize:
+        KisAslWriterUtils::writeFixedString<byteOrder>("post", io);
+        break;
+    case psd_adjustment_threshold:
+        KisAslWriterUtils::writeFixedString<byteOrder>("thrs", io);
+        break;
+    case psd_adjustment_none:
+        return;
+    }
+
+    KisAslWriterUtils::OffsetStreamPusher<quint32, byteOrder> adjustmentSizeTag(io, 2);
+
+    switch (type) {
+    case psd_adjustment_levels: {
+        // Version, then 29 fixed-size channel records. Photoshop always
+        // writes the full table, so the 28 records after the composite are
+        // padded out at identity rather than omitted.
+        SAFE_WRITE_EX(byteOrder, io, (quint16)2);
+        SAFE_WRITE_EX(byteOrder, io, levels.inputFloor);
+        SAFE_WRITE_EX(byteOrder, io, levels.inputCeiling);
+        SAFE_WRITE_EX(byteOrder, io, levels.outputFloor);
+        SAFE_WRITE_EX(byteOrder, io, levels.outputCeiling);
+        SAFE_WRITE_EX(byteOrder, io, levels.gamma);
+        for (int i = 1; i < 29; i++) {
+            SAFE_WRITE_EX(byteOrder, io, (quint16)0);
+            SAFE_WRITE_EX(byteOrder, io, (quint16)255);
+            SAFE_WRITE_EX(byteOrder, io, (quint16)0);
+            SAFE_WRITE_EX(byteOrder, io, (quint16)255);
+            SAFE_WRITE_EX(byteOrder, io, (quint16)100);
+        }
+        break;
+    }
+    case psd_adjustment_posterize:
+    case psd_adjustment_threshold:
+        // Photoshop pads both of these to four bytes.
+        SAFE_WRITE_EX(byteOrder, io, value);
+        SAFE_WRITE_EX(byteOrder, io, (quint16)0);
+        break;
+    case psd_adjustment_invert:
+        // No payload: the key alone is the whole configuration.
+        break;
+    case psd_adjustment_none:
+        break;
+    }
 }
 
 void PsdAdditionalLayerInfoBlock::writeLfx2BlockEx(QIODevice &io, const QDomDocument &stylesXmlDoc, bool useLfxsLayerStyleFormat)
