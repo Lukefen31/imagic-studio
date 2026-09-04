@@ -158,6 +158,23 @@ jobs:
           rm -f "$RUNNER_TEMP/cert.p12"
           echo "signed=true" >> "$GITHUB_OUTPUT"
 
+      - name: Check for notarization credentials
+        # Signing and notarizing are separate gates. The certificate alone
+        # produces a correctly signed bundle; notarization additionally
+        # needs an Apple ID and an app-specific password. Missing the
+        # second must not throw away a build that satisfied the first.
+        id: notary
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
+            echo "notarize=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No Apple ID / app password; signing only, not notarizing."
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Sign the .app bundle
         if: steps.cert.outputs.signed == 'true'
         env:
@@ -189,7 +206,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
 
       - name: Notarize the .app bundle
-        if: steps.cert.outputs.signed == 'true'
+        if: steps.cert.outputs.signed == 'true' && steps.notary.outputs.notarize == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -212,27 +229,36 @@ jobs:
           python3 -u packaging/macos/macos-apptodmg.py "$CI_PROJECT_DIR"/_dmg/*.app \
             --media-path ./packaging/macos/ 2>&1 | tee build-dmg.log
 
-      - name: Sign and notarize the .dmg
+      - name: Sign the .dmg
         if: steps.cert.outputs.signed == 'true'
         env:
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          DMG="$(ls _packaging/*.dmg | head -1)"
+          codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+
+      - name: Notarize and staple the .dmg
+        if: steps.cert.outputs.signed == 'true' && steps.notary.outputs.notarize == 'true'
+        env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           DMG="$(ls _packaging/*.dmg | head -1)"
-          codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" --wait
           xcrun stapler staple "$DMG"
+          # The check a real user's Mac performs on first open.
           spctl -a -t open --context context:primary-signature -vv "$DMG"
 
       - name: Name the artifact for what it is
         id: naming
         run: |
-          if [ "${{ steps.cert.outputs.signed }}" = "true" ]; then
+          if [ "${{ steps.notary.outputs.notarize }}" = "true" ]; then
             echo "name=imagic-studio-macos-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.cert.outputs.signed }}" = "true" ]; then
+            echo "name=imagic-studio-macos-SIGNED-NOT-NOTARIZED-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           else
             echo "name=imagic-studio-macos-UNSIGNED-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           fi
@@ -247,10 +273,11 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload to the release
-        # Refuses to publish an unsigned build: on Apple Silicon Gatekeeper
-        # blocks one outright, so shipping it would be worse than shipping
-        # nothing.
-        if: ${{ inputs.release_tag != '' && steps.cert.outputs.signed == 'true' }}
+        # Refuses to publish anything but a notarized build. Gatekeeper
+        # blocks an unsigned bundle outright on Apple Silicon, and warns
+        # on a signed-but-unnotarized one, so shipping either would be
+        # worse than shipping nothing.
+        if: ${{ inputs.release_tag != '' && steps.notary.outputs.notarize == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
