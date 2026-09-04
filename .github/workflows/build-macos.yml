@@ -1,0 +1,258 @@
+# imagic studio macOS build.
+#
+# Sibling of build-windows.yml, following the same principle: mirror upstream
+# Krita's GitLab CI contract (build-tools/ci-scripts/macos.yml) on GitHub
+# Actions. Download KDE's prebuilt macOS dependency packages from
+# invent.kde.org's package registry (anonymous, public), build Krita itself,
+# then produce the .app and .dmg with upstream's own packaging scripts.
+#
+# What differs from upstream: KDE signs and notarizes through their internal
+# ci-notary-service, which we have no access to. We do it ourselves with the
+# imagic Developer ID, in the "Sign and notarize" steps below, and only when
+# the certificate secret is present.
+#
+# Cold run on the free macOS runner is expected to be long (upstream's own
+# macOS job is the slowest of the three); a warm ccache should cut the compile
+# substantially, exactly as it does on Windows.
+
+name: Build macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "imagic-studio release tag to upload the DMG to (leave empty for artifacts only)"
+        required: false
+        default: ""
+
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to the same KDE helper revisions the Windows build uses, so the two
+  # platforms cannot drift onto different dependency sets.
+  DEPS_MGMT_SHA: 44a226bacca177515162b45b233f10c95da4d20b
+  CI_UTILITIES_SHA: 9285a277a971fcea3e0332bb5b7906ecfe6116bd
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 350
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Clone KDE CI helper repos (pinned)
+        run: |
+          git clone https://invent.kde.org/packaging/krita-deps-management.git
+          git -C krita-deps-management checkout $DEPS_MGMT_SHA
+          git clone https://invent.kde.org/packaging/krita-ci-utilities.git krita-deps-management/ci-utilities
+          git -C krita-deps-management/ci-utilities checkout $CI_UTILITIES_SHA
+
+      - name: Install ccache
+        run: brew install ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-macos-qt5-${{ github.sha }}
+          restore-keys: |
+            ccache-macos-qt5-
+
+      - name: Python venv + requirements
+        run: |
+          python3 -m venv venv --upgrade-deps
+          . venv/bin/activate
+          pip install -r krita-deps-management/requirements.txt
+
+      - name: Download the KDE macOS toolchain
+        # Upstream's macos.yml does this before anything else: the toolchain
+        # tarball carries the compiler and helper binaries the dep packages
+        # were built against, and _krita-tools/activate puts them on PATH.
+        run: |
+          . venv/bin/activate
+          python3 -u krita-deps-management/tools/download-macos-tools.py
+
+      - name: Build Krita (prebuilt deps + source build)
+        env:
+          KDECI_BUILD_TYPE: Release
+          KDECI_CC_CACHE: ${{ github.workspace }}/.ccache
+          KDECI_CACHE_PATH: ${{ github.workspace }}/.kde-dep-cache
+          KDECI_GITLAB_SERVER: https://invent.kde.org/
+          KDECI_PACKAGE_PROJECT: teams/ci-artifacts/krita-macos
+          KDECI_REPO_METADATA_PATH: ${{ github.workspace }}/krita-deps-management/repo-metadata
+          KDECI_COMPRESS_PACKAGES_ON_DOWNLOAD: "False"
+          # Release settings, matching upstream's macos-release-qt5 job and
+          # our own Windows build: asserts hidden, tests off.
+          KDECI_EXTRA_CMAKE_ARGS: "-DHIDE_SAFE_ASSERTS=ON -DBUILD_TESTING=OFF -DBRANDING=default"
+          KDECI_ONLY_BUILD: "True"
+          KRITACI_SKIP_UPLOAD_NIGHTLY_PACKAGE: "True"
+          KRITACI_SKIP_BUILD_3RDPARTY_PLUGINS: "True"
+          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/krita-deps-management/tools/macos-toolchain-krita.cmake
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+          QMAKE_MACOSX_DEPLOYMENT_TARGET: "10.15"
+          PYTHONUTF8: "1"
+          CI_PROJECT_NAME: krita
+          CI_PROJECT_DIR: ${{ github.workspace }}
+          CI_COMMIT_REF_NAME: ${{ github.ref_name }}
+        run: |
+          . venv/bin/activate
+          # Upstream unsets this deliberately so the venv does not shadow the
+          # toolchain binaries that _krita-tools/activate puts on PATH.
+          unset VIRTUAL_ENV
+          source _krita-tools/activate
+          git config --global --add safe.directory "$CI_PROJECT_DIR"
+          python3 -u krita-deps-management/tools/replace-branch-in-seed-file.py \
+            krita-deps-management/latest/krita-deps.yml -p -o branch-corrected-deps.yml -d master
+          python3 -u krita-deps-management/tools/generate-deps-file.py \
+            -s branch-corrected-deps.yml -o .kde-ci.yml
+          python3 -u krita-deps-management/ci-utilities/run-ci-build.py \
+            --project "$CI_PROJECT_NAME" --branch "$CI_COMMIT_REF_NAME" \
+            --platform MacOS/Qt5/Shared --skip-publishing 2>&1 | tee build-krita.log
+
+      - name: Build the .app bundle
+        env:
+          CI_PROJECT_DIR: ${{ github.workspace }}
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+        run: |
+          . venv/bin/activate
+          unset VIRTUAL_ENV
+          source _krita-tools/activate
+          python3 -u packaging/macos/macos-deploy.py \
+            --install-dir ./_install --output-dir "$CI_PROJECT_DIR/_dmg" \
+            --krita-source ./ 2>&1 | tee build-app.log
+
+      - name: Import Developer ID certificate
+        # Signing is skipped rather than failed when the secret is absent, so
+        # the first runs can prove the build works before the certificate is
+        # copied into this repo. An unsigned bundle is clearly named as such
+        # at upload time so it cannot be mistaken for a shippable one.
+        id: cert
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$CERT_P12_BASE64" ]; then
+            echo "No signing certificate in this repo; producing an unsigned build."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN_PATH" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the .app bundle
+        if: steps.cert.outputs.signed == 'true'
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          APP="$(ls -d _dmg/*.app | head -1)"
+          # Deep signing with the hardened runtime, which notarization
+          # requires. Krita ships its own Python and plugin dylibs, so the
+          # inner Mach-O files must be signed before the bundle itself.
+          find "$APP" \( -name "*.dylib" -o -name "*.so" \) -print0 \
+            | xargs -0 -I{} codesign --force --timestamp --options runtime \
+              --entitlements packaging/macos/entitlements.plist \
+              --sign "$SIGN_IDENTITY" {}
+          codesign --force --deep --timestamp --options runtime \
+            --entitlements packaging/macos/entitlements.plist \
+            --sign "$SIGN_IDENTITY" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Notarize the .app bundle
+        if: steps.cert.outputs.signed == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          APP="$(ls -d _dmg/*.app | head -1)"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/app.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/app.zip" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$APP"
+
+      - name: Build the .dmg
+        env:
+          CI_PROJECT_DIR: ${{ github.workspace }}
+        run: |
+          . venv/bin/activate
+          unset VIRTUAL_ENV
+          source _krita-tools/activate
+          python3 -u packaging/macos/macos-apptodmg.py "$CI_PROJECT_DIR"/_dmg/*.app \
+            --media-path ./packaging/macos/ 2>&1 | tee build-dmg.log
+
+      - name: Sign and notarize the .dmg
+        if: steps.cert.outputs.signed == 'true'
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          DMG="$(ls _packaging/*.dmg | head -1)"
+          codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$DMG"
+          spctl -a -t open --context context:primary-signature -vv "$DMG"
+
+      - name: Name the artifact for what it is
+        id: naming
+        run: |
+          if [ "${{ steps.cert.outputs.signed }}" = "true" ]; then
+            echo "name=imagic-studio-macos-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=imagic-studio-macos-UNSIGNED-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload packages
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.naming.outputs.name }}
+          path: |
+            _packaging/*.dmg
+          if-no-files-found: warn
+
+      - name: Upload to the release
+        # Refuses to publish an unsigned build: on Apple Silicon Gatekeeper
+        # blocks one outright, so shipping it would be worse than shipping
+        # nothing.
+        if: ${{ inputs.release_tag != '' && steps.cert.outputs.signed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ inputs.release_tag }}" _packaging/*.dmg \
+            --repo Lukefen31/imagic-studio --clobber
+
+      - name: Upload logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-macos-${{ github.run_number }}
+          path: |
+            build-krita.log
+            build-app.log
+            build-dmg.log
+            _build/CMakeCache.txt
+          if-no-files-found: warn
