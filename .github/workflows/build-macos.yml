@@ -27,7 +27,10 @@ on:
 
 concurrency:
   group: build-macos-${{ github.ref }}
-  cancel-in-progress: true
+  # Deliberately NOT cancel-in-progress. A cold run here is hours of
+  # compiling; a second dispatch killed one at 1907/3604 objects with
+  # nothing wrong with it. Queue behind, never discard.
+  cancel-in-progress: false
 
 env:
   # Pinned to the same KDE helper revisions the Windows build uses, so the two
@@ -59,7 +62,7 @@ jobs:
         run: brew install ccache
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .ccache
           key: ccache-macos-qt5-${{ github.sha }}
@@ -283,6 +286,17 @@ jobs:
         run: |
           gh release upload "${{ inputs.release_tag }}" _packaging/*.dmg \
             --repo Lukefen31/imagic-studio --clobber
+
+      - name: Save ccache
+        # cache/save rather than the round-trip action, with
+        # always(): the object files a cancelled run produced are
+        # exactly what the next run wants, and the default action
+        # skips its post step when a job does not finish.
+        if: ${{ always() }}
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-macos-qt5-${{ github.sha }}
 
       - name: Upload logs
         if: ${{ always() }}
