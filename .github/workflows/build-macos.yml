@@ -263,6 +263,34 @@ jobs:
             [ "$macho" = "$MAIN" ] && continue
             codesign "${SIGN_FLAGS[@]}" "$macho"
           done < "$MACHOS"
+
+          # Signing a Mach-O that lives inside a nested bundle invalidates
+          # that bundle's own seal, so Python.framework and the Qt
+          # frameworks now disagree with their _CodeSignature and
+          # `--verify --deep --strict` ends the step with "nested code is
+          # modified or invalid". Re-seal each nested bundle, deepest
+          # first, before sealing the app around them.
+          #
+          # The signable unit of a versioned framework is Versions/<v>,
+          # not the .framework directory and never the Current symlink.
+          # Reproduced and fixed against a real 322-binary bundle with
+          # ad-hoc signatures, which seal identically: before, "nested
+          # code is modified or invalid"; after, "valid on disk".
+          BUNDLES="$RUNNER_TEMP/bundles.txt"
+          { find "$APP" -type d -name "*.framework" | while IFS= read -r f; do
+              find "$f/Versions" -mindepth 1 -maxdepth 1 -type d \
+                ! -name Current 2>/dev/null
+            done
+            find "$APP" -mindepth 1 -type d \
+              \( -name "*.app" -o -name "*.bundle" -o -name "*.xpc" \)
+          } | sort -u \
+            | awk '{print gsub(/\//,"/"), $0}' | sort -rn | cut -d' ' -f2- \
+            > "$BUNDLES"
+          echo "re-sealing $(wc -l < "$BUNDLES" | tr -d ' ') nested bundles"
+          while IFS= read -r bundle; do
+            codesign "${SIGN_FLAGS[@]}" "$bundle"
+          done < "$BUNDLES"
+
           codesign "${SIGN_FLAGS[@]}" \
             --entitlements packaging/macos/entitlements.plist "$MAIN"
           codesign "${SIGN_FLAGS[@]}" \
