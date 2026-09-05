@@ -202,19 +202,43 @@ jobs:
           # carries a Python framework and plugin binaries with no
           # suffix at all.
           #
-          # --mime-type matters: plain file(1) prints THREE lines for a
-          # universal binary (a summary plus one per architecture), and
-          # cutting the first field off those yields the literal string
-          # "<path> (for architecture x86_64)". codesign was handed that
-          # and quite rightly said no such file. Krita ships universal
+          # file(1) prints one line PER ARCHITECTURE for a fat binary, on
+          # top of a summary line, and --mime-type does not change that -
+          # it only changes what follows the colon. So stripping the mime
+          # type off the end still leaves the literal, non-existent path
+          # "<path> (for architecture x86_64)", which is what codesign
+          # rejected. Measured on a real 5,076-file bundle: 500 lines out,
+          # 178 of them paths that do not exist. Krita ships universal
           # dependencies, so most of this bundle is fat.
+          #
+          # Strip the architecture suffix as well, then collapse the
+          # duplicate lines each fat binary produces, keeping find's order.
+          # Removing only the trailing mime type - never cutting at the
+          # first colon - is what keeps paths containing colons or spaces
+          # intact.
           SIGN_FLAGS=(--force --timestamp --options runtime --sign "$SIGN_IDENTITY")
+          MACHOS="$RUNNER_TEMP/machos.txt"
           find "$APP" -type f -exec file --mime-type {} + \
             | sed -n 's/:[[:space:]]*application\/x-mach-binary$//p' \
-            | while IFS= read -r macho; do
-                [ "$macho" = "$MAIN" ] && continue
-                codesign "${SIGN_FLAGS[@]}" "$macho"
-              done
+            | sed 's/ (for architecture [^)]*)$//' \
+            | awk '!seen[$0]++' > "$MACHOS"
+
+          # This list has been wrong twice now, and each time the build
+          # spent two hours compiling Krita before finding out. Check it
+          # before a single codesign runs. Reading from a file rather than
+          # a pipe keeps the loop out of a subshell so this exit works.
+          while IFS= read -r macho; do
+            test -e "$macho" || {
+              echo "::error::not a real path, refusing to sign: $macho" >&2
+              exit 1
+            }
+          done < "$MACHOS"
+          echo "signing $(wc -l < "$MACHOS" | tr -d ' ') Mach-O binaries"
+
+          while IFS= read -r macho; do
+            [ "$macho" = "$MAIN" ] && continue
+            codesign "${SIGN_FLAGS[@]}" "$macho"
+          done < "$MACHOS"
           codesign "${SIGN_FLAGS[@]}" \
             --entitlements packaging/macos/entitlements.plist "$MAIN"
           codesign "${SIGN_FLAGS[@]}" \
