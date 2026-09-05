@@ -184,24 +184,37 @@ jobs:
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: |
           APP="$(ls -d _dmg/*.app | head -1)"
-          MAIN="$APP/Contents/MacOS/krita"
+          # Read the executable name out of the bundle rather than
+          # assuming it: the app is still krita.app today and will not
+          # always be, and a rebrand must not silently leave the main
+          # binary unsigned.
+          EXE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" \
+            "$APP/Contents/Info.plist")"
+          MAIN="$APP/Contents/MacOS/$EXE"
+          test -f "$MAIN"
           chmod -R u+rw "$APP"
           xattr -cr "$APP"
 
           # Notarization requires a Developer ID signature, the hardened
           # runtime and a secure timestamp on EVERY Mach-O in the bundle,
-          # and one unsigned Mach-O fails the whole submission. Detect
-          # them by content, not by extension: this bundle carries a full
-          # Python framework and plugin binaries with no suffix at all,
-          # which is exactly how the desktop app's first notarization was
-          # failed. Sign inside-out: inner binaries bare, then the main
-          # executable and the bundle with entitlements.
+          # and one unsigned Mach-O fails the whole submission, so find
+          # them by content rather than by extension - this bundle
+          # carries a Python framework and plugin binaries with no
+          # suffix at all.
+          #
+          # --mime-type matters: plain file(1) prints THREE lines for a
+          # universal binary (a summary plus one per architecture), and
+          # cutting the first field off those yields the literal string
+          # "<path> (for architecture x86_64)". codesign was handed that
+          # and quite rightly said no such file. Krita ships universal
+          # dependencies, so most of this bundle is fat.
           SIGN_FLAGS=(--force --timestamp --options runtime --sign "$SIGN_IDENTITY")
-          find "$APP" -type f -exec file {} + \
-            | grep "Mach-O" | cut -d: -f1 | while IFS= read -r macho; do
-              [ "$macho" = "$MAIN" ] && continue
-              codesign "${SIGN_FLAGS[@]}" "$macho"
-            done
+          find "$APP" -type f -exec file --mime-type {} + \
+            | sed -n 's/:[[:space:]]*application\/x-mach-binary$//p' \
+            | while IFS= read -r macho; do
+                [ "$macho" = "$MAIN" ] && continue
+                codesign "${SIGN_FLAGS[@]}" "$macho"
+              done
           codesign "${SIGN_FLAGS[@]}" \
             --entitlements packaging/macos/entitlements.plist "$MAIN"
           codesign "${SIGN_FLAGS[@]}" \
