@@ -132,6 +132,30 @@ jobs:
             --install-dir ./_install --output-dir "$CI_PROJECT_DIR/_dmg" \
             --krita-source ./ 2>&1 | tee build-app.log
 
+      - name: Name the bundle after the product
+        # CFBundleName and the app icon were rebranded back in August, so
+        # the Dock and menu bar already say imagic studio. Two things
+        # were not: the bundle's own filename, which is the label Finder
+        # and Applications show, and CFBundleDisplayName, which is the
+        # key that overrides it. Both must happen BEFORE signing, since
+        # renaming or re-plisting a signed bundle invalidates its
+        # signature.
+        run: |
+          APP="$(ls -d _dmg/*.app | head -1)"
+          /usr/libexec/PlistBuddy -c \
+            "Add :CFBundleDisplayName string 'imagic studio'" \
+            "$APP/Contents/Info.plist" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c \
+              "Set :CFBundleDisplayName 'imagic studio'" \
+              "$APP/Contents/Info.plist"
+          if [ "$(basename "$APP")" != "imagic studio.app" ]; then
+            mv "$APP" "_dmg/imagic studio.app"
+          fi
+          /usr/libexec/PlistBuddy -c "Print :CFBundleName" \
+            "_dmg/imagic studio.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName" \
+            "_dmg/imagic studio.app/Contents/Info.plist"
+
       - name: Import Developer ID certificate
         # Signing is skipped rather than failed when the secret is absent, so
         # the first runs can prove the build works before the certificate is
@@ -266,7 +290,17 @@ jobs:
           . venv/bin/activate
           unset VIRTUAL_ENV
           source _krita-tools/activate
-          python3 -u packaging/macos/macos-apptodmg.py "$CI_PROJECT_DIR"/_dmg/*.app \
+          # hdiutil's arguments are assembled with a bare .split() in
+          # macos-apptodmg.py, so the dmg name (which is also the volume
+          # name) has to be free of spaces. The .app inside it is not.
+          # checkout@v4 clones shallow and without tags, so describe would
+          # otherwise name the DMG after a commit sha.
+          git fetch --tags --force --quiet || true
+          VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+          [ -n "$VERSION" ] || VERSION="${GITHUB_SHA:0:8}"
+          python3 -u packaging/macos/macos-apptodmg.py \
+            "$CI_PROJECT_DIR"/_dmg/*.app \
+            -n "imagic-studio-$VERSION" \
             --media-path ./packaging/macos/ 2>&1 | tee build-dmg.log
 
       - name: Sign the .dmg
