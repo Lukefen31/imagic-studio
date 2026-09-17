@@ -1373,7 +1373,8 @@ void KisConfig::setScrollingCheckers(bool sc) const
 
 QColor KisConfig::canvasBorderColor(bool defaultValue) const
 {
-    QColor color(QColor(128,128,128));
+    // imagic studio: the area around the canvas matches the brand near-black
+    QColor color(QColor(13,13,13));
     return (defaultValue ? color : m_cfg.readEntry("canvasBorderColor", color));
 }
 
