@@ -39,11 +39,18 @@ ManifestDPIAware false
 !define KRTIA_PUBLISHER "imagic"
 !ifdef KRITA_INSTALLER_64
 	!define KRITA_PRODUCTNAME "imagic studio (x64)"
-	!define KRITA_UNINSTALL_REGKEY "Krita_x64"
+	!define KRITA_UNINSTALL_REGKEY "imagicStudio_x64"
 !else
 	!define KRITA_PRODUCTNAME "imagic studio (x86)"
-	!define KRITA_UNINSTALL_REGKEY "Krita_x86"
+	!define KRITA_UNINSTALL_REGKEY "imagicStudio_x86"
 !endif
+# imagic studio installs side by side with Krita: it has its own registry
+# key, uninstall entry and ProgID, and never reads, replaces or removes
+# anything that belongs to a Krita install.
+!define IMAGIC_REGKEY "Software\imagic studio"
+!define IMAGIC_PROGID "imagicStudio.Image"
+# imagic studio 1.0.0 and 1.0.1 registered under Krita's own keys.
+!define IMAGIC_LEGACY_UNINSTALL_REGKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Krita_x64"
 
 VIProductVersion "${KRITA_VERSION}"
 VIAddVersionKey "CompanyName" "${KRTIA_PUBLISHER}"
@@ -82,12 +89,9 @@ Var CreateDesktopIcon
 !insertmacro MUI_PAGE_LICENSE "license_gpl-3.0.rtf"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_COMPONENTS
-!define MUI_PAGE_CUSTOMFUNCTION_PRE  func_ShellExLicensePage_Init
-!define MUI_PAGE_HEADER_TEXT "$(ShellExLicensePageHeader)"
-!insertmacro MUI_PAGE_LICENSE "license.rtf"
 !define MUI_STARTMENUPAGE_DEFAULTFOLDER "imagic studio"
 !define MUI_STARTMENUPAGE_REGISTRY_ROOT HKLM
-!define MUI_STARTMENUPAGE_REGISTRY_KEY "Software\Krita"
+!define MUI_STARTMENUPAGE_REGISTRY_KEY "${IMAGIC_REGKEY}"
 !define MUI_STARTMENUPAGE_REGISTRY_VALUENAME "StartMenuFolder"
 !define MUI_STARTMENUPAGE_NODISABLE
 !insertmacro MUI_PAGE_STARTMENU Krita $KritaStartMenuFolder
@@ -118,42 +122,77 @@ Page Custom func_BeforeInstallPage_Init
 !include "krita_versions_detect.nsh"
 !include "krita_shell_integration.nsh"
 
-Var KritaMsiProductX86
-Var KritaMsiProductX64
 Var KritaNsisVersion
 Var KritaNsisBitness
 Var KritaNsisInstallLocation
 
-Var PrevShellExInstallLocation
-Var PrevShellExStandalone
-
-Var UninstallShellExStandalone
-
-Section "-Remove_shellex" SEC_remove_shellex
-	${If} $PrevShellExInstallLocation != ""
-	${AndIf} $PrevShellExStandalone == 1
-	${AndIf} $KritaNsisVersion == ""
-	${AndIf} ${FileExists} "$PrevShellExInstallLocation\uninstall.exe"
-		push $R0
-		DetailPrint "$(RemovingShellEx)"
-		SetDetailsPrint listonly
-		ExecWait "$PrevShellExInstallLocation\uninstall.exe /S _?=$PrevShellExInstallLocation" $R0
-		${If} $R0 != 0
-			${IfNot} ${Silent}
-				MessageBox MB_OK|MB_ICONSTOP "$(RemoveShellExFailed)"
-			${EndIf}
-			SetDetailsPrint both
-			DetailPrint "$(RemoveShellExFailed)"
-			Abort
+!macro Imagic_ForEachDocType_Macro _var
+	Push ""
+	Push ".kra"
+	Push ".krz"
+	Push ".ora"
+	${Do}
+		Pop "${_var}"
+		${If} "${_var}" == ""
+			${Break}
 		${EndIf}
-		Delete "$PrevShellExInstallLocation\uninstall.exe"
-		RMDir /REBOOTOK "$PrevShellExInstallLocation"
-		SetRebootFlag false
-		SetDetailsPrint lastused
-		DetailPrint "$(RemoveShellExDone)"
-		pop $R0
-	${EndIf}
-SectionEnd
+!macroend
+!define Imagic_ForEachDocType "!insertmacro Imagic_ForEachDocType_Macro"
+
+# Offer imagic studio in "Open with" for its formats through its own ProgID.
+# A document type only gets imagic studio as its default when nothing else
+# (for example Krita) already owns it.
+!macro Imagic_RegisterFileAssociation_Macro ExePath
+	File "/oname=${KRITA_SHELLEX_DIR}\kritafile.ico" kritafile.ico
+	File "/oname=${KRITA_SHELLEX_DIR}\krita.ico" krita.ico
+	WriteRegStr HKCR "${IMAGIC_PROGID}" "" "imagic studio Image"
+	WriteRegStr HKCR "${IMAGIC_PROGID}" "FriendlyTypeName" "imagic studio Image"
+	WriteRegStr HKCR "${IMAGIC_PROGID}\DefaultIcon" "" "$\"${KRITA_SHELLEX_DIR}\kritafile.ico$\",0"
+	WriteRegStr HKCR "${IMAGIC_PROGID}\shell\open" "FriendlyAppName" "imagic studio"
+	WriteRegStr HKCR "${IMAGIC_PROGID}\shell\open\command" "" "$\"${ExePath}$\" $\"%1$\""
+	WriteRegStr HKLM "${IMAGIC_REGKEY}\Capabilities" "ApplicationName" "imagic studio"
+	WriteRegStr HKLM "${IMAGIC_REGKEY}\Capabilities" "ApplicationDescription" "imagic studio image editor"
+	Push $0
+	Push $1
+	${Imagic_ForEachDocType} $0
+		WriteRegStr HKCR "$0\OpenWithProgIds" "${IMAGIC_PROGID}" ""
+		WriteRegStr HKLM "${IMAGIC_REGKEY}\Capabilities\FileAssociations" "$0" "${IMAGIC_PROGID}"
+		ReadRegStr $1 HKCR "$0" ""
+		${If} $1 == ""
+			WriteRegStr HKCR "$0" "" "${IMAGIC_PROGID}"
+		${EndIf}
+	${Loop}
+	${ForEachGenericImage} $0
+		WriteRegStr HKCR "$0\OpenWithProgIds" "${IMAGIC_PROGID}" ""
+		WriteRegStr HKLM "${IMAGIC_REGKEY}\Capabilities\FileAssociations" "$0" "${IMAGIC_PROGID}"
+	${EndForEachGenericImage}
+	Pop $1
+	Pop $0
+	WriteRegStr HKLM "Software\RegisteredApplications" "imagic studio" "${IMAGIC_REGKEY}\Capabilities"
+!macroend
+!define Imagic_RegisterFileAssociation '!insertmacro Imagic_RegisterFileAssociation_Macro'
+
+!macro Imagic_UnregisterFileAssociation_Macro
+	Delete ${KRITA_SHELLEX_DIR}\kritafile.ico
+	Delete ${KRITA_SHELLEX_DIR}\krita.ico
+	DeleteRegValue HKLM "Software\RegisteredApplications" "imagic studio"
+	Push $0
+	Push $1
+	${Imagic_ForEachDocType} $0
+		DeleteRegValue HKCR "$0\OpenWithProgIds" "${IMAGIC_PROGID}"
+		ReadRegStr $1 HKCR "$0" ""
+		${If} $1 == "${IMAGIC_PROGID}"
+			DeleteRegValue HKCR "$0" ""
+		${EndIf}
+	${Loop}
+	${ForEachGenericImage} $0
+		DeleteRegValue HKCR "$0\OpenWithProgIds" "${IMAGIC_PROGID}"
+	${EndForEachGenericImage}
+	Pop $1
+	Pop $0
+	DeleteRegKey HKCR "${IMAGIC_PROGID}"
+!macroend
+!define Imagic_UnregisterFileAssociation '!insertmacro Imagic_UnregisterFileAssociation_Macro'
 
 Section "$(SectionRemoveOldVer)" SEC_remove_old_version
 	${If} $KritaNsisInstallLocation != ""
@@ -207,23 +246,23 @@ Section "-Thing"
 	# Registry entries for version recognition
 	#   InstallLocation:
 	#     Where krita is installed
-	WriteRegStr HKLM "Software\Krita" \
+	WriteRegStr HKLM "${IMAGIC_REGKEY}" \
 	                 "InstallLocation" "$INSTDIR"
 	#   Version:
 	#     Version of Krita
-	WriteRegStr HKLM "Software\Krita" \
+	WriteRegStr HKLM "${IMAGIC_REGKEY}" \
 	                 "Version" "${KRITA_VERSION}"
 	#   x64:
 	#     Set to 1 for 64-bit Krita, can be missing for 32-bit Krita
 !ifdef KRITA_INSTALLER_64
-	WriteRegDWORD HKLM "Software\Krita" \
+	WriteRegDWORD HKLM "${IMAGIC_REGKEY}" \
 	                   "x64" 1
 !else
-	DeleteRegValue HKLM "Software\Krita" "x64"
+	DeleteRegValue HKLM "${IMAGIC_REGKEY}" "x64"
 !endif
 	#   InstallerLanguage:
 	#     Language used by the installer (to be re-used for the uninstaller)
-	WriteRegStr HKLM "Software\Krita" \
+	WriteRegStr HKLM "${IMAGIC_REGKEY}" \
 	                 "InstallerLanguage" "$LANGUAGE"
 	#   StartMenuFolder:
 	#     Start Menu Folder
@@ -240,7 +279,7 @@ SectionEnd
 
 Section "-Main_associate"
 	CreateDirectory ${KRITA_SHELLEX_DIR}
-	${Krita_RegisterFileAssociation} "$INSTDIR\bin\krita.exe"
+	${Imagic_RegisterFileAssociation} "$INSTDIR\bin\krita.exe"
 SectionEnd
 
 Section "-Main_Shortcuts"
@@ -253,35 +292,6 @@ Section "-Main_Shortcuts"
 		# For the desktop icon, keep the name short and omit version info
 		CreateShortcut "$DESKTOP\imagic studio.lnk" "$INSTDIR\bin\krita.exe" "" "$INSTDIR\shellex\krita.ico" 0
 	${EndIf}
-SectionEnd
-
-Section "$(SectionShellEx)" SEC_shellex
-	${If} ${RunningX64}
-		${Krita_RegisterComComonents} 64
-	${EndIf}
-	${Krita_RegisterComComonents} 32
-
-	${Krita_RegisterShellExtension}
-
-	#   ShellExtension\InstallLocation:
-	#     Where the shell extension is installed
-	#     If installed by Krita installer, this must point to shellex sub-dir
-	WriteRegStr HKLM "Software\Krita\ShellExtension" \
-	                 "InstallLocation" "$INSTDIR\shellex"
-	#   ShellExtension\Version:
-	#     Version of the shell extension
-	WriteRegStr HKLM "Software\Krita\ShellExtension" \
-	                 "Version" "${KRITASHELLEX_VERSION}"
-	#   ShellExtension\Standalone:
-	#     0 = Installed by Krita installer
-	#     1 = Standalone installer
-	WriteRegDWORD HKLM "Software\Krita\ShellExtension" \
-	                   "Standalone" 0
-	#   ShellExtension\KritaExePath:
-	#     Path to krita.exe as specified by user or by Krita installer
-	#     Empty if not specified
-	WriteRegStr HKLM "Software\Krita\ShellExtension" \
-	                 "KritaExePath" "$INSTDIR\bin\krita.exe"
 SectionEnd
 
 Section "-Main_refreshShell"
@@ -306,43 +316,10 @@ SectionEnd
 	#!insertmacro MUI_DESCRIPTION_TEXT ${SEC_remove_shellex} "Remove previously installed Krita Shell Integration."
 	!insertmacro MUI_DESCRIPTION_TEXT ${SEC_remove_old_version} "$(SectionRemoveOldVerDesc)"
 	!insertmacro MUI_DESCRIPTION_TEXT ${SEC_product_main} "$(SectionMainDesc)"
-	!insertmacro MUI_DESCRIPTION_TEXT ${SEC_shellex} "$(SectionShellExDesc)"
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
-Section "un.$(SectionShellEx)"
-	${If} $UninstallShellExStandalone == 1
-		push $R0
-		DetailPrint "$(RemovingShellEx)"
-		SetDetailsPrint listonly
-		ExecWait "$INSTDIR\shellex\uninstall.exe /S _?=$INSTDIR\shellex" $R0
-		${If} $R0 != 0
-			${IfNot} ${Silent}
-				MessageBox MB_OK|MB_ICONSTOP "$(RemoveShellExFailed)"
-			${EndIf}
-			SetDetailsPrint lastused
-			SetDetailsPrint both
-			DetailPrint "$(RemoveShellExFailed)"
-		${EndIf}
-		Delete "$INSTDIR\shellex\uninstall.exe"
-		RMDir /REBOOTOK "$INSTDIR\shellex"
-		SetDetailsPrint lastused
-		DetailPrint "$(RemoveShellExDone)"
-		pop $R0
-	${Else}
-		${Krita_UnregisterShellExtension}
-
-		${If} ${RunningX64}
-			${Krita_UnregisterComComonents} 64
-		${EndIf}
-		${Krita_UnregisterComComonents} 32
-	${EndIf}
-SectionEnd
-
 Section "un.Main_associate"
-	# TODO: Conditional, use install log
-	${If} $UninstallShellExStandalone != 1
-		${Krita_UnregisterFileAssociation}
-	${EndIf}
+	${Imagic_UnregisterFileAssociation}
 SectionEnd
 
 Section "un.Main_Shortcuts"
@@ -362,7 +339,7 @@ SectionEnd
 
 Section "un.Thing"
 	RMDir /REBOOTOK $INSTDIR\shellex
-	DeleteRegKey HKLM "Software\Krita"
+	DeleteRegKey HKLM "${IMAGIC_REGKEY}"
 	DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${KRITA_UNINSTALL_REGKEY}"
 	Delete $INSTDIR\uninstall.exe
 	RMDir /REBOOTOK $INSTDIR
@@ -424,102 +401,31 @@ Function .onInit
 	${Endif}
 !endif
 
-	# Detect ancient Krita versions
-	${DetectKritaMsi32bit} $KritaMsiProductX86
-	${If} ${RunningX64}
-		${DetectKritaMsi64bit} $KritaMsiProductX64
-	${EndIf}
-	${If} $KritaMsiProductX86 != ""
-	${OrIf} $KritaMsiProductX64 != ""
-		${IfNot} ${Silent}
-			MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON1 "$(MsgAncientVerMustBeRemoved)" \
-						/SD IDYES \
-						IDYES lbl_removeAncientVer
-			Abort
+	# Find a previous imagic studio install. Krita's own installs (NSIS or
+	# MSI) are deliberately never looked at, so they are never removed.
+	StrCpy $KritaNsisVersion ""
+	StrCpy $KritaNsisInstallLocation ""
+	StrCpy $KritaNsisBitness ${KRITA_INSTALLER_BITNESS}
+	ClearErrors
+	ReadRegStr $0 HKLM "${IMAGIC_REGKEY}" "InstallLocation"
+	${If} ${Errors}
+	${OrIf} $0 == ""
+		# imagic studio 1.0.0/1.0.1 used Krita's keys. Only take that entry
+		# when it really is imagic studio's.
+		ReadRegStr $1 HKLM "${IMAGIC_LEGACY_UNINSTALL_REGKEY}" "DisplayName"
+		StrCpy $1 $1 13
+		${If} $1 == "imagic studio"
+			ReadRegStr $KritaNsisInstallLocation HKLM "${IMAGIC_LEGACY_UNINSTALL_REGKEY}" "InstallLocation"
+			ReadRegStr $KritaNsisVersion HKLM "${IMAGIC_LEGACY_UNINSTALL_REGKEY}" "DisplayVersion"
 		${EndIf}
-		lbl_removeAncientVer:
-		${If} $KritaMsiProductX64 != ""
-			push $R0
-			${MsiUninstall} $KritaMsiProductX64 $R0
-			${If} $R0 != 0
-				${IfNot} ${Silent}
-					${IfKritaMsi3Alpha} $KritaMsiProductX64
-						MessageBox MB_OK|MB_ICONSTOP "$(MsgKrita3alpha1RemoveFailed)"
-					${Else}
-						MessageBox MB_OK|MB_ICONSTOP "$(MsgKrita2msi64bitRemoveFailed)"
-					${EndIf}
-				${EndIf}
-				Abort
-			${EndIf}
-			pop $R0
-			StrCpy $KritaMsiProductX64 ""
-		${EndIf}
-		${If} $KritaMsiProductX86 != ""
-			push $R0
-			${MsiUninstall} $KritaMsiProductX86 $R0
-			${If} $R0 != 0
-				${IfNot} ${Silent}
-					MessageBox MB_OK|MB_ICONSTOP "$(MsgKrita2msi32bitRemoveFailed)"
-				${EndIf}
-				Abort
-			${EndIf}
-			pop $R0
-			StrCpy $KritaMsiProductX86 ""
-		${EndIf}
+	${Else}
+		StrCpy $KritaNsisInstallLocation $0
+		ReadRegStr $KritaNsisVersion HKLM "${IMAGIC_REGKEY}" "Version"
 	${EndIf}
 
-	${DetectKritaNsis} $KritaNsisVersion $KritaNsisBitness $KritaNsisInstallLocation
-	${If} $KritaNsisVersion != ""
-		push $R0
-		${If} $KritaNsisVersion == "4.5.4.0"
-			# HACK: 4.4.5 has incorrect version number.
-			StrCpy $KritaNsisVersion "4.4.5.0"
-		${EndIf}
-		${VersionCompare} "${KRITA_VERSION}" "$KritaNsisVersion" $R0
-		${If} $R0 == 0
-			# Same version installed... probably
-			${If} $KritaNsisBitness == ${KRITA_INSTALLER_BITNESS}
-				# Very likely the same version
-				${IfNot} ${Silent}
-					MessageBox MB_OK|MB_ICONINFORMATION "$(MsgKritaSameVerReinstall)"
-				${EndIf}
-			${Else}
-				# Very likely the same version but different arch
-				${IfNot} ${Silent}
-!ifdef KRITA_INSTALLER_64
-					MessageBox MB_OK|MB_ICONINFORMATION "$(MsgKrita3264bitSwap)"
-!else
-					MessageBox MB_OK|MB_ICONEXCLAMATION "$(MsgKrita3264bitSwap)"
-!endif
-				${EndIf}
-			${EndIf}
-		${ElseIf} $R0 == 1
-			# Upgrade
-			${If} $KritaNsisBitness == ${KRITA_INSTALLER_BITNESS}
-				# Silent about upgrade
-			${Else}
-				# Upgrade but different arch
-				${IfNot} ${Silent}
-!ifdef KRITA_INSTALLER_64
-					MessageBox MB_OK|MB_ICONINFORMATION "$(MsgKrita3264bitSwap)"
-!else
-					MessageBox MB_OK|MB_ICONEXCLAMATION "$(MsgKrita3264bitSwap)"
-!endif
-				${EndIf}
-			${EndIf}
-		${ElseIf} $R0 == 2
-			${IfNot} ${Silent}
-				MessageBox MB_OK|MB_ICONSTOP "$(MsgKritaNewerAlreadyInstalled)"
-			${EndIf}
-			Abort
-		${Else}
-			${IfNot} ${Silent}
-				MessageBox MB_OK|MB_ICONSTOP "Error: Unexpected state"
-			${EndIf}
-			Abort
-		${EndIf}
+	${If} $KritaNsisInstallLocation != ""
+	${AndIf} ${FileExists} "$KritaNsisInstallLocation\uninstall.exe"
 		!insertmacro SetSectionFlag ${SEC_remove_old_version} ${SF_SELECTED}
-		# Detect if Krita is running...
 		${If} ${IsFileinUse} "$KritaNsisInstallLocation\bin\krita.exe"
 			${IfNot} ${Silent}
 				MessageBox MB_OK|MB_ICONEXCLAMATION "$(MsgKritaRunning)"
@@ -527,27 +433,10 @@ Function .onInit
 			SetErrorLevel 10
 			Abort
 		${EndIf}
-		pop $R0
 	${Else}
+		StrCpy $KritaNsisInstallLocation ""
 		!insertmacro ClearSectionFlag ${SEC_remove_old_version} ${SF_SELECTED}
 		SectionSetText ${SEC_remove_old_version} ""
-	${EndIf}
-
-	# Detect standalone shell extension
-	# TODO: Would it be possible to update Krita without replacing the standalone shellex?
-	ClearErrors
-	ReadRegStr $PrevShellExInstallLocation HKLM "Software\Krita\ShellExtension" "InstallLocation"
-	#ReadRegStr $PrevShellExVersion HKLM "Software\Krita\ShellExtension" "Version"
-	ReadRegDWORD $PrevShellExStandalone HKLM "Software\Krita\ShellExtension" "Standalone"
-	#ReadRegStr $PrevShellExKritaExePath HKLM "Software\Krita\ShellExtension" "KritaExePath"
-	${If} ${Errors}
-		# TODO: Assume no previous version installed or what?
-	${EndIf}
-	${If} $PrevShellExStandalone == 1
-		#!insertmacro SetSectionFlag ${SEC_remove_shellex} ${SF_SELECTED}
-	${Else}
-		#!insertmacro ClearSectionFlag ${SEC_remove_shellex} ${SF_SELECTED}
-		#SectionSetText ${SEC_remove_shellex} ""
 	${EndIf}
 FunctionEnd
 
@@ -567,13 +456,12 @@ Function un.onInit
 
 	# Get and use installer language:
 	Push $0
-	ReadRegStr $0 HKLM "Software\Krita" "InstallerLanguage"
+	ReadRegStr $0 HKLM "${IMAGIC_REGKEY}" "InstallerLanguage"
 	${If} $0 != ""
 		StrCpy $LANGUAGE $0
 	${EndIf}
 	Pop $0
 
-	ReadRegDWORD $UninstallShellExStandalone HKLM "Software\Krita\ShellExtension" "Standalone"
 	${If} ${Silent}
 		# Only check here if running in silent mode. It's otherwise checked in
 		# un.func_UnintallFirstpage_Init in order to display a prompt in the
@@ -592,13 +480,6 @@ Function un.func_UnintallFirstpage_Init
 		${EndIf}
 		SetErrorLevel 10
 		Quit
-	${EndIf}
-FunctionEnd
-
-Function func_ShellExLicensePage_Init
-	${IfNot} ${SectionIsSelected} ${SEC_shellex}
-		# Skip ShellEx license page if not selected
-		Abort
 	${EndIf}
 FunctionEnd
 

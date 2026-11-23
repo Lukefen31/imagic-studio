@@ -15,7 +15,7 @@ DlgKritaLog::DlgKritaLog(QWidget *parent)
 
 QString DlgKritaLog::originalFileName()
 {
-    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/krita.log";
+    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/imagic-studio.log";
 }
 
 QString DlgKritaLog::captionText()

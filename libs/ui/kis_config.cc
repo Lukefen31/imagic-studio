@@ -791,14 +791,14 @@ void KisConfig::setCanvasSurfaceBitDepthMode(QSettings *settings, CanvasSurfaceB
 KisConfig::CanvasSurfaceBitDepthMode KisConfig::canvasSurfaceBitDepthMode(bool defaultValue) const
 {
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
     return canvasSurfaceBitDepthMode(&kritarc, defaultValue);
 }
 
 void KisConfig::setCanvasSurfaceBitDepthMode(CanvasSurfaceBitDepthMode value)
 {
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
     setCanvasSurfaceBitDepthMode(&kritarc, value);
 }
 
@@ -1108,7 +1108,7 @@ bool KisConfig::useOpenGL(bool defaultValue) const
     }
 
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
 
     return kritarc.value("OpenGLRenderer", "auto").toString() != "none";
 }
@@ -1116,7 +1116,7 @@ bool KisConfig::useOpenGL(bool defaultValue) const
 void KisConfig::disableOpenGL() const
 {
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
 
     kritarc.setValue("OpenGLRenderer", "none");
 }
@@ -1159,14 +1159,14 @@ bool KisConfig::preferXcbEglProvider(const QSettings *settings, bool defaultValu
 bool KisConfig::preferXcbEglProvider(bool defaultValue) const
 {
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
     return preferXcbEglProvider(&kritarc, defaultValue);
 }
 
 void KisConfig::setPreferXcbEglProvider(bool value)
 {
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
     kritarc.setValue("preferXcbEglProvider", value);
 }
 
@@ -1610,7 +1610,7 @@ void KisConfig::setShowFilterGalleryLayerMaskDialog(bool showFilterGallery) cons
 QString KisConfig::canvasState(bool defaultValue) const
 {
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
     return (defaultValue ? "OPENGL_NOT_TRIED" : kritarc.value("canvasState", "OPENGL_NOT_TRIED").toString());
 }
 
@@ -1622,7 +1622,7 @@ void KisConfig::setCanvasState(const QString& state) const
     }
     if (acceptableStates.contains(state)) {
         const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-        QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+        QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
         kritarc.setValue("canvasState", state);
     }
 }
@@ -1674,7 +1674,7 @@ bool KisConfig::useWin8PointerInput(bool defaultValue) const
 {
 #ifdef Q_OS_WIN
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
 
     return useWin8PointerInputNoApp(&kritarc, defaultValue);
 #else
@@ -1691,7 +1691,7 @@ void KisConfig::setUseWin8PointerInput(bool value)
     // I don't want it to be set if the user hasn't touched it
     if (useWin8PointerInput() != value) {
         const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-        QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+        QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
         setUseWin8PointerInputNoApp(&kritarc, value);
     }
 
@@ -2927,7 +2927,7 @@ void KisConfig::setSelectionActionBarOrientation(KisConfig::SelectionActionsBarO
 KisConfig::RootSurfaceFormat KisConfig::rootSurfaceFormat(bool defaultValue) const
 {
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
 
     return rootSurfaceFormat(&kritarc, defaultValue);
 }
@@ -2935,7 +2935,7 @@ KisConfig::RootSurfaceFormat KisConfig::rootSurfaceFormat(bool defaultValue) con
 void KisConfig::setRootSurfaceFormat(KisConfig::RootSurfaceFormat value)
 {
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
 
     setRootSurfaceFormat(&kritarc, value);
 }

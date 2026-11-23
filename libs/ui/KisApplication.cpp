@@ -1128,6 +1128,13 @@ void KisApplication::remoteArguments(const QString &message)
         return;
     }
     executeRemoteArguments(unpackedMessage, mw);
+
+    // imagic studio: launching the app again while it runs brings the
+    // existing window to the front instead of appearing to do nothing.
+    mw->setWindowState(mw->windowState() & ~Qt::WindowMinimized);
+    mw->show();
+    mw->raise();
+    mw->activateWindow();
 }
 
 void KisApplication::fileOpenRequested(const QString &url)
@@ -1268,7 +1275,7 @@ void KisApplication::resetConfig()
     
     // find user settings file
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QString kritarcPath = configPath + QStringLiteral("/kritarc");
+    QString kritarcPath = configPath + QStringLiteral("/imagic-studiorc");
     
     QFile kritarcFile(kritarcPath);
     

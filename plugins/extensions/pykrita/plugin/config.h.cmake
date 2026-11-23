@@ -10,4 +10,4 @@
 #define SIP_VERSION 0x@SIP_VERSION@
 
 /// Name of the file where per-plugin configuration is stored
-#define CONFIG_FILE "kritapykritarc"
+#define CONFIG_FILE "imagic-studiopykritarc"

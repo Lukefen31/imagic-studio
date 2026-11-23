@@ -121,7 +121,7 @@ void tryInitDrMingw()
     }
 
     // Set the log file path to %LocalAppData%\kritacrash.log
-    const QString logFile = QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)).absoluteFilePath("kritacrash.log");
+    const QString logFile = QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)).absoluteFilePath("imagic-studiocrash.log");
     const QByteArray logFilePath = QDir::toNativeSeparators(logFile).toLocal8Bit();
     myExcHndlSetLogFileNameA(logFilePath.data());
 }
@@ -174,7 +174,7 @@ Java_org_krita_android_JNIWrappers_saveState(JNIEnv* /*env*/,
     }
 
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath + QStringLiteral("/imagic-studiodisplayrc"), QSettings::IniFormat);
     kritarc.setValue("canvasState", "OPENGL_SUCCESS");
 }
 
@@ -216,6 +216,12 @@ Java_org_krita_android_JNIWrappers_openFileFromIntent(JNIEnv* /*env*/,
 
 extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
 {
+    // imagic studio identity: set before anything opens a config file or a
+    // standard path. With the upstream name "krita" we shared %APPDATA%\krita,
+    // kritarc and krita.log with any real Krita on the machine.
+    QCoreApplication::setApplicationName(QStringLiteral("imagic-studio"));
+    QCoreApplication::setOrganizationName(QString());
+
 #ifdef Q_OS_ANDROID
     KisAndroidUtils::performInitialSetup();
 #endif
@@ -243,7 +249,9 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
     qputenv("QT_BEARER_POLL_TIMEOUT", QByteArray::number(-1));
 
     // A per-user unique string, without /, because QLocalServer cannot use names with a / in it
-    QString key = "Krita5" + QStandardPaths::writableLocation(QStandardPaths::HomeLocation).replace("/", "_");
+    // imagic studio: our own single-instance key. Sharing upstream's "Krita5"
+    // key made a launch hand off to any running krita.exe and exit silently.
+    QString key = "imagicstudio1" + QStandardPaths::writableLocation(QStandardPaths::HomeLocation).replace("/", "_");
     key = key.replace(":", "_").replace("\\","_");
 
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts, true);
@@ -360,7 +368,7 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
 #endif
 
     const QDir configPath(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation));
-    QSettings kritarc(configPath.absoluteFilePath("kritadisplayrc"), QSettings::IniFormat);
+    QSettings kritarc(configPath.absoluteFilePath("imagic-studiodisplayrc"), QSettings::IniFormat);
 
     // KFI18N is broken on Android. See kswitchlanguagedialog_p.cpp for details.
     // If/when removing this, also remove the matching logic from there!
@@ -715,10 +723,10 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
 
     /// Initialize application info, it will be used by both, Qt and
     /// DrKonqi of the host system
-    // imagic studio rebrand: only the *display* name changes. The component
-    // name must stay "krita" — it drives QStandardPaths resource folders,
-    // the kritarc config file name and KF component lookups.
-    KAboutData aboutData("krita",
+    // imagic studio identity: the component name drives QStandardPaths
+    // folders (%APPDATA%\imagic-studio) and the main config file
+    // (imagic-studiorc), so imagic studio never reads or writes Krita's.
+    KAboutData aboutData(QStringLiteral("imagic-studio"),
                             QStringLiteral("imagic studio"),
                             KritaVersionWrapper::versionString(true),
                             i18n("imagic studio, based on Krita, is a full-featured digital art studio"),
@@ -783,6 +791,10 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
         const bool batchRun = args.exportAs() || args.exportSequence();
 
         if (!batchRun) {
+#ifdef Q_OS_WIN
+            // Let the running imagic studio bring its window to the front.
+            AllowSetForegroundWindow(ASFW_ANY);
+#endif
             if (app.sendMessage(args.serialize().toBase64())) {
                 return 0;
             }
@@ -877,7 +889,7 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
     int state = KisApplication::exec();
 
     {
-        QSettings kritarc(configPath.absoluteFilePath("kritadisplayrc"), QSettings::IniFormat);
+        QSettings kritarc(configPath.absoluteFilePath("imagic-studiodisplayrc"), QSettings::IniFormat);
         kritarc.setValue("canvasState", "OPENGL_SUCCESS");
     }
 
