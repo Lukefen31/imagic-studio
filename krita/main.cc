@@ -294,7 +294,7 @@ bool relaunchSelf()
     message[4095] = 0;
     MessageBoxW(nullptr, message, L"imagic studio", MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
     TerminateProcess(GetCurrentProcess(), 3);
-    for (;;) {}
+    ExitProcess(3);
 }
 
 LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS *info)
@@ -1279,11 +1279,8 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
         imagicStartup::setStage(kritarc, imagicStartup::StageDone);
         QMessageBox::critical(nullptr,
                               QStringLiteral("imagic studio"),
-                              QStringLiteral("imagic studio could not finish starting.
-
-"
-                                             "Please email snap@imagic.ink and attach imagic-studio.log from this folder:
-%1")
+                              QStringLiteral("imagic studio could not finish starting.\n\n"
+                                             "Please email snap@imagic.ink and attach imagic-studio.log from this folder:\n%1")
                                   .arg(QDir::toNativeSeparators(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))));
 #endif
         return 1;
@@ -1305,9 +1302,7 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
             KisMainWindow *mw = KisPart::instance()->currentMainwindow();
             QMessageBox::information(mw,
                                      QStringLiteral("imagic studio"),
-                                     QStringLiteral("imagic studio did not finish starting last time, so it is now using a safer graphics mode (level %1 of 3).
-
-"
+                                     QStringLiteral("imagic studio did not finish starting last time, so it is now using a safer graphics mode (level %1 of 3).\n\n"
                                                     "Everything works, but the canvas may feel slower. Installing the latest graphics driver for your PC usually fixes the cause. "
                                                     "Afterwards you can switch the renderer back in Settings > Configure imagic studio > Display.")
                                          .arg(level));
