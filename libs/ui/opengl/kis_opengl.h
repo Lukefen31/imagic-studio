@@ -71,6 +71,18 @@ public:
                                               KisConfig::CanvasSurfaceBitDepthMode preferredCanvasSurfaceBitMode,
                                               bool enableDebug);
 
+    /**
+     * imagic studio: build and probe exactly one ANGLE configuration
+     * (Direct3D 11, or the WARP software rasterizer when \p useWarp is set)
+     * instead of every renderer selectSurfaceConfig() tries. It never loads
+     * the desktop OpenGL (ICD) driver, which is where some Intel laptop
+     * drivers take the whole process down during startup detection.
+     *
+     * \p result always receives the generated config; the return value
+     * says whether the probe succeeded.
+     */
+    static bool selectAngleSurfaceConfig(bool useWarp, bool enableDebug, RendererConfig *result);
+
     static void setDefaultSurfaceConfig(const RendererConfig &config);
 
     static OpenGLRenderer getCurrentOpenGLRenderer();

@@ -148,7 +148,10 @@ void KisOpenGL::initialize()
 
 #ifdef Q_OS_WIN
 
+    // imagic studio: a failed final probe leaves the optional empty, and
+    // dereferencing it crashed the process with no message at all.
     if (!qEnvironmentVariableIsSet("KRITA_UNLOCK_TEXTURE_BUFFERS") &&
+        openGLCheckResult &&
         openGLCheckResult->rendererString().toUpper().contains("ANGLE")) {
 
         // Angle should always be openGLES...
@@ -1186,6 +1189,38 @@ KisOpenGL::RendererConfig KisOpenGL::selectSurfaceConfig(KisOpenGL::OpenGLRender
     return resultConfig;
 }
 
+bool KisOpenGL::selectAngleSurfaceConfig(bool useWarp, bool enableDebug, KisOpenGL::RendererConfig *result)
+{
+    const OpenGLRenderer renderer = useWarp ? RendererSoftware : RendererOpenGLES;
+    const RendererConfig config =
+        generateSurfaceConfig(renderer,
+                              {KisSurfaceColorSpaceWrapper::DefaultColorSpace, 8},
+                              enableDebug,
+                              true);
+    *result = config;
+
+    const boost::optional<KisOpenGLModeProber::Result> info =
+        KisOpenGLModeProber::instance()->probeFormat(config);
+
+    if (!info || !info->isSupportedVersion()) {
+        dbgOpenGL << "imagic studio: single ANGLE probe failed" << ppVar(useWarp);
+        return false;
+    }
+
+    g_detectedRenderers << std::make_tuple(info->rendererString(),
+                                           info->driverVersionString(),
+                                           info->isSupportedVersion());
+
+    // WARP ships with every Windows 10/11 install, so it stays selectable
+    // next to Direct3D 11. Desktop OpenGL was deliberately not probed.
+    OpenGLRenderers supported = OpenGLRenderers(renderer);
+    supported |= RendererSoftware;
+    overrideSupportedRenderers(supported, renderer);
+    overrideOpenGLWarningString({});
+
+    return true;
+}
+
 void KisOpenGL::setDefaultSurfaceConfig(const KisOpenGL::RendererConfig &config)
 {
     KIS_SAFE_ASSERT_RECOVER_NOOP(!g_sanityDefaultFormatIsSet);
@@ -1209,5 +1244,5 @@ void KisOpenGL::setDefaultSurfaceConfig(const KisOpenGL::RendererConfig &config)
 
 bool KisOpenGL::hasOpenGL()
 {
-    return openGLCheckResult->isSupportedVersion();
+    return openGLCheckResult && openGLCheckResult->isSupportedVersion();
 }

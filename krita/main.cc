@@ -78,6 +78,11 @@
 #include <QtPlatformHeaders/QWindowsWindowFunctions>
 #endif
 #include <QLibrary>
+#include <QTimer>
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <cwchar>
 #endif
 
 #ifdef Q_OS_MACOS
@@ -156,6 +161,325 @@ void resetRotation()
     dbgKrita << "SetDisplayAutoRotationPreferences(ORIENTATION_PREFERENCE_NONE) returned" << result;
 }
 } // namespace
+
+/**
+ * imagic studio startup guard.
+ *
+ * Upstream Krita can die before it shows any window (a crash inside a
+ * graphics driver while probing OpenGL renderers, a qFatal, an abort) and
+ * on Windows 10 that is completely silent: no window, no dialog, and the
+ * process is gone before anyone opens Task Manager. The guard makes every
+ * one of those paths visible:
+ *
+ * - the stage this launch has reached is persisted to imagic-studiodisplayrc
+ *   before each risky step, so the next launch knows how far the last one
+ *   got and can pick a safer graphics mode;
+ * - an unhandled-exception filter, an abort handler and a fatal-message
+ *   handler catch hard failures. During startup they relaunch studio (which
+ *   then escalates to the next safe graphics level); after three tries, or
+ *   once the window is up, they show a message box instead of vanishing.
+ *
+ * Safe graphics levels: 1 = ANGLE Direct3D 11 only (no desktop OpenGL
+ * probing), 2 = ANGLE WARP software rasterizer, 3 = WARP plus the
+ * QPainter canvas (no OpenGL canvas at all).
+ */
+namespace imagicStartup
+{
+enum Stage : LONG {
+    StageBoot = 0,
+    StageGlProbe,
+    StageAppInit,
+    StageWindow,
+    StageRunning,
+    StageDone,
+};
+
+const char *stageName(LONG stage)
+{
+    switch (stage) {
+    case StageGlProbe: return "gl_probe";
+    case StageAppInit: return "app_init";
+    case StageWindow: return "window";
+    case StageRunning: return "running";
+    case StageDone: return "closed";
+    default: return "boot";
+    }
+}
+
+bool isStartupStageName(const QString &name)
+{
+    return name == QLatin1String("gl_probe") || name == QLatin1String("app_init") || name == QLatin1String("window");
+}
+
+constexpr int kMaxRelaunches = 3;
+constexpr int kMaxSafeLevel = 3;
+
+volatile LONG g_stage = StageBoot;
+volatile LONG g_reported = 0;
+volatile LONG g_inFilter = 0;
+bool g_ownsMarker = true;
+wchar_t g_exePath[MAX_PATH * 4] = {0};
+wchar_t g_logDir[MAX_PATH * 4] = {0};
+wchar_t g_fatalText[1024] = {0};
+LPTOP_LEVEL_EXCEPTION_FILTER g_chainedFilter = nullptr;
+QtMessageHandler g_previousMessageHandler = nullptr;
+
+int envInt(const wchar_t *name)
+{
+    wchar_t buf[32] = {0};
+    const DWORD n = GetEnvironmentVariableW(name, buf, 32);
+    if (n == 0 || n >= 32) return 0;
+    return _wtoi(buf);
+}
+
+void setEnvInt(const wchar_t *name, unsigned long value)
+{
+    wchar_t buf[32] = {0};
+    _snwprintf(buf, 31, L"%lu", value);
+    SetEnvironmentVariableW(name, buf);
+}
+
+bool relaunchSelf()
+{
+    if (!g_exePath[0]) return false;
+
+    setEnvInt(L"IMAGIC_STUDIO_RELAUNCH", static_cast<unsigned long>(envInt(L"IMAGIC_STUDIO_RELAUNCH") + 1));
+    setEnvInt(L"IMAGIC_STUDIO_PARENT_PID", GetCurrentProcessId());
+
+    static wchar_t commandLine[32768];
+    wcsncpy(commandLine, GetCommandLineW(), 32767);
+    commandLine[32767] = 0;
+
+    STARTUPINFOW si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&pi, sizeof(pi));
+
+    AllowSetForegroundWindow(ASFW_ANY);
+    if (!CreateProcessW(g_exePath, commandLine, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+
+[[noreturn]] void failHard(DWORD code)
+{
+    if (InterlockedExchange(&g_reported, 1)) {
+        TerminateProcess(GetCurrentProcess(), 3);
+    }
+
+    const LONG stage = g_stage;
+    const bool duringStartup = stage >= StageGlProbe && stage <= StageWindow;
+
+    if (duringStartup && g_ownsMarker && envInt(L"IMAGIC_STUDIO_RELAUNCH") < kMaxRelaunches && relaunchSelf()) {
+        TerminateProcess(GetCurrentProcess(), 3);
+    }
+
+    static wchar_t message[4096];
+    _snwprintf(message, 4095,
+               L"imagic studio %ls and had to close.\n\n"
+               L"Error code: 0x%08lX (stage: %hs)%ls%ls\n\n"
+               L"What usually helps:\n"
+               L"1. Install the latest graphics driver for your PC (from Intel, AMD, NVIDIA or your laptop maker), restart Windows, then open imagic studio again.\n"
+               L"2. If it still closes, email snap@imagic.ink and attach imagic-studio.log and imagic-studiocrash.log from this folder:\n%ls",
+               duringStartup ? L"could not start" : L"ran into a problem",
+               code,
+               stageName(stage),
+               g_fatalText[0] ? L"\nDetails: " : L"",
+               g_fatalText,
+               g_logDir);
+    message[4095] = 0;
+    MessageBoxW(nullptr, message, L"imagic studio", MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    TerminateProcess(GetCurrentProcess(), 3);
+    for (;;) {}
+}
+
+LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS *info)
+{
+    // DrMingw's filter (installed later) may chain back into this one.
+    if (InterlockedExchange(&g_inFilter, 1)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    if (g_chainedFilter) {
+        // Let DrMingw write imagic-studiocrash.log first.
+        g_chainedFilter(info);
+    }
+    const DWORD code = (info && info->ExceptionRecord) ? info->ExceptionRecord->ExceptionCode : 0;
+    failHard(code);
+}
+
+void abortHandler(int)
+{
+    failHard(0xC0000409);
+}
+
+void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &message)
+{
+    if (type == QtFatalMsg) {
+        const QString text = message.left(1000);
+        text.toWCharArray(g_fatalText);
+        g_fatalText[qMin(text.size(), 1000)] = 0;
+        if (g_previousMessageHandler) {
+            g_previousMessageHandler(QtWarningMsg, context, message);
+        }
+        failHard(0xC0000409);
+    }
+    if (g_previousMessageHandler) {
+        g_previousMessageHandler(type, context, message);
+    }
+}
+
+/// Called first thing in krita_main: no Qt objects exist yet.
+void installCrashGuards()
+{
+    GetModuleFileNameW(nullptr, g_exePath, MAX_PATH * 4 - 1);
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", g_logDir, MAX_PATH * 4 - 1);
+    if (n == 0 || n >= MAX_PATH * 4 - 1) {
+        wcsncpy(g_logDir, L"%LOCALAPPDATA%", MAX_PATH * 4 - 1);
+    }
+    SetUnhandledExceptionFilter(unhandledExceptionFilter);
+    signal(SIGABRT, abortHandler);
+    g_previousMessageHandler = qInstallMessageHandler(messageHandler);
+}
+
+/// Called after DrMingw installed its own filter, so ours stays in charge
+/// of the visible message and DrMingw still writes its crash log.
+void reinstallCrashFilter()
+{
+    LPTOP_LEVEL_EXCEPTION_FILTER previous = SetUnhandledExceptionFilter(unhandledExceptionFilter);
+    if (previous && previous != unhandledExceptionFilter) {
+        g_chainedFilter = previous;
+    }
+}
+
+void setStage(QSettings &rc, LONG stage)
+{
+    g_stage = stage;
+    if (!g_ownsMarker) return;
+    rc.setValue("imagicStartup/stage", QString::fromLatin1(stageName(stage)));
+    rc.setValue("imagicStartup/pid", static_cast<qulonglong>(GetCurrentProcessId()));
+    rc.sync();
+}
+
+/// Support and test hook: IMAGIC_STUDIO_TEST_CRASH=<stage>[:<below level>]
+/// crashes on purpose at that stage (only while the safe level is below the
+/// given level), to exercise the recovery path end to end.
+void maybeTestCrash(const char *stage, int safeLevel)
+{
+    const QString spec = qEnvironmentVariable("IMAGIC_STUDIO_TEST_CRASH");
+    if (spec.isEmpty()) return;
+    const QStringList parts = spec.split(':');
+    if (parts.first() != QLatin1String(stage)) return;
+    const int belowLevel = parts.size() > 1 ? parts[1].toInt() : kMaxSafeLevel + 1;
+    if (safeLevel >= belowLevel) return;
+    volatile int *nowhere = nullptr;
+    *nowhere = 1;
+}
+
+bool isOurProcessAlive(qulonglong pid)
+{
+    if (!pid || pid == GetCurrentProcessId()) return false;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
+    if (!h) return false;
+    bool alive = WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
+    if (alive) {
+        wchar_t image[MAX_PATH * 4] = {0};
+        DWORD size = MAX_PATH * 4 - 1;
+        alive = QueryFullProcessImageNameW(h, 0, image, &size) && _wcsicmp(image, g_exePath) == 0;
+    }
+    CloseHandle(h);
+    return alive;
+}
+
+bool onlyIntelGpu(QString *adapters)
+{
+    DISPLAY_DEVICEW dd;
+    bool sawAny = false;
+    bool allIntel = true;
+    for (DWORD i = 0;; ++i) {
+        ZeroMemory(&dd, sizeof(dd));
+        dd.cb = sizeof(dd);
+        if (!EnumDisplayDevicesW(nullptr, i, &dd, 0)) break;
+        if (!(dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) continue;
+        const QString name = QString::fromWCharArray(dd.DeviceString);
+        if (!adapters->contains(name)) {
+            *adapters += (adapters->isEmpty() ? QString() : QStringLiteral(", ")) + name;
+        }
+        sawAny = true;
+        if (!name.contains(QLatin1String("Intel"), Qt::CaseInsensitive)) {
+            allIntel = false;
+        }
+    }
+    return sawAny && allIntel;
+}
+
+struct Decision {
+    int safeLevel = 0;
+    bool recovered = false;
+    QString previousStage;
+};
+
+/// Reads what the previous launch got to and decides the graphics mode.
+Decision decide(QSettings &rc)
+{
+    Decision d;
+
+    // A relaunch from the crash guard: let the crashed parent finish dying
+    // so its pid is not mistaken for a running instance.
+    const int parentPid = envInt(L"IMAGIC_STUDIO_PARENT_PID");
+    if (parentPid) {
+        HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(parentPid));
+        if (h) {
+            WaitForSingleObject(h, 10000);
+            CloseHandle(h);
+        }
+        SetEnvironmentVariableW(L"IMAGIC_STUDIO_PARENT_PID", nullptr);
+    }
+
+    d.previousStage = rc.value("imagicStartup/stage").toString();
+    const qulonglong previousPid = rc.value("imagicStartup/pid", 0).toULongLong();
+    d.safeLevel = qBound(0, rc.value("imagicStartup/safeLevel", 0).toInt(), kMaxSafeLevel);
+
+    // Another studio process is alive (already running, or still building
+    // its first-run database): leave its marker alone. This launch will
+    // most likely hand off to it.
+    if (isOurProcessAlive(previousPid)) {
+        g_ownsMarker = false;
+        return d;
+    }
+
+    // The user picked another renderer in Settings since we forced one:
+    // their choice wins and the safe level starts over.
+    if (d.safeLevel > 0 &&
+        rc.value("OpenGLRenderer").toString() != rc.value("imagicStartup/safeRenderer").toString()) {
+        d.safeLevel = 0;
+    }
+
+    if (isStartupStageName(d.previousStage)) {
+        d.safeLevel = qMin(d.safeLevel + 1, kMaxSafeLevel);
+        d.recovered = true;
+    }
+
+    const int forced = envInt(L"IMAGIC_STUDIO_SAFE_GRAPHICS");
+    if (forced > 0) {
+        d.safeLevel = qMin(forced, kMaxSafeLevel);
+    }
+
+    if (d.safeLevel > 0) {
+        const QString renderer = d.safeLevel == 1 ? QStringLiteral("angle")
+                               : d.safeLevel == 2 ? QStringLiteral("software")
+                                                  : QStringLiteral("none");
+        rc.setValue("OpenGLRenderer", renderer);
+        rc.setValue("imagicStartup/safeRenderer", renderer);
+    }
+    rc.setValue("imagicStartup/safeLevel", d.safeLevel);
+    rc.sync();
+    return d;
+}
+} // namespace imagicStartup
 #endif
 
 #ifdef Q_OS_ANDROID
@@ -216,6 +540,11 @@ Java_org_krita_android_JNIWrappers_openFileFromIntent(JNIEnv* /*env*/,
 
 extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
 {
+#ifdef Q_OS_WIN
+    // imagic studio: never die silently. Must run before anything else.
+    imagicStartup::installCrashGuards();
+#endif
+
     // imagic studio identity: set before anything opens a config file or a
     // standard path. With the upstream name "krita" we shared %APPDATA%\krita,
     // kritarc and krita.log with any real Krita on the machine.
@@ -370,6 +699,14 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
     const QDir configPath(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation));
     QSettings kritarc(configPath.absoluteFilePath("imagic-studiodisplayrc"), QSettings::IniFormat);
 
+#ifdef Q_OS_WIN
+    // imagic studio: learn how far the previous launch got and choose the
+    // graphics mode before any renderer is probed. Must run before the
+    // renderer preference below is read, because it may rewrite it.
+    const imagicStartup::Decision startupDecision = imagicStartup::decide(kritarc);
+    QString startupGraphicsNote;
+#endif
+
     // KFI18N is broken on Android. See kswitchlanguagedialog_p.cpp for details.
     // If/when removing this, also remove the matching logic from there!
 #ifdef Q_OS_ANDROID
@@ -446,8 +783,50 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
         const KisConfig::CanvasSurfaceBitDepthMode bitDepthMode =
             KisConfig::canvasSurfaceBitDepthMode(&kritarc);
 
-        const KisOpenGL::RendererConfig config =
-            KisOpenGL::selectSurfaceConfig(preferredRenderer, rootSurfaceFormat, bitDepthMode, enableOpenGLDebug);
+        KisOpenGL::RendererConfig config;
+        bool configChosen = false;
+
+#ifdef Q_OS_WIN
+        // imagic studio: the full upstream probe creates contexts on every
+        // renderer, including the desktop OpenGL driver. Some Intel laptop
+        // drivers crash the process right there, before any window exists.
+        // With an Intel-only GPU (where upstream picks ANGLE anyway) or in
+        // a safe graphics level, probe only the ANGLE config we will use.
+        imagicStartup::setStage(kritarc, imagicStartup::StageGlProbe);
+        imagicStartup::maybeTestCrash("gl_probe", startupDecision.safeLevel);
+
+        QString adapters;
+        const bool intelOnly = imagicStartup::onlyIntelGpu(&adapters);
+        const bool rendererIsDefault = preferredRendererString == QLatin1String("angle") ||
+                                       preferredRendererString == QLatin1String("auto");
+
+        if (startupDecision.safeLevel >= 2) {
+            configChosen = KisOpenGL::selectAngleSurfaceConfig(true, enableOpenGLDebug, &config);
+            if (!configChosen && startupDecision.safeLevel >= 3) {
+                // Canvas is QPainter at this level; keep Qt on ANGLE WARP
+                // even unprobed so it never falls back to desktop OpenGL.
+                configChosen = true;
+            }
+        } else if (startupDecision.safeLevel == 1 || (intelOnly && rendererIsDefault)) {
+            configChosen = KisOpenGL::selectAngleSurfaceConfig(false, enableOpenGLDebug, &config);
+            if (!configChosen) {
+                configChosen = KisOpenGL::selectAngleSurfaceConfig(true, enableOpenGLDebug, &config);
+            }
+        }
+
+        startupGraphicsNote = QStringLiteral("imagic studio startup: adapters [%1], intel-only %2, safe graphics level %3, previous stage '%4', relaunch %5, graphics path %6")
+                                  .arg(adapters)
+                                  .arg(QLatin1String(intelOnly ? "yes" : "no"))
+                                  .arg(startupDecision.safeLevel)
+                                  .arg(startupDecision.previousStage)
+                                  .arg(imagicStartup::envInt(L"IMAGIC_STUDIO_RELAUNCH"))
+                                  .arg(QLatin1String(configChosen ? (config.angleRenderer == KisOpenGL::AngleRendererD3d11Warp ? "ANGLE WARP only" : "ANGLE D3D11 only")
+                                                                   : "full upstream probe"));
+#endif
+
+        if (!configChosen) {
+            config = KisOpenGL::selectSurfaceConfig(preferredRenderer, rootSurfaceFormat, bitDepthMode, enableOpenGLDebug);
+        }
 
         KisOpenGL::setDefaultSurfaceConfig(config);
         KisOpenGL::setDebugSynchronous(openGLDebugSynchronous);
@@ -661,6 +1040,11 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
     }
 #endif
 
+#ifdef Q_OS_WIN
+    imagicStartup::setStage(kritarc, imagicStartup::StageAppInit);
+    imagicStartup::maybeTestCrash("app_init", startupDecision.safeLevel);
+#endif
+
     // first create the application so we can create a pixmap
     KisApplication app(key, argc, argv);
 
@@ -676,6 +1060,9 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
     installTranslators(app);
 
     KisUsageLogger::writeHeader();
+#ifdef Q_OS_WIN
+    KisUsageLogger::log(startupGraphicsNote);
+#endif
     KisOpenGL::initialize();
 
 #ifdef HAVE_SET_HAS_BORDER_IN_FULL_SCREEN_DEFAULT
@@ -766,6 +1153,7 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
     KCrash::initialize();
 #elif defined USE_DRMINGW
     tryInitDrMingw();
+    imagicStartup::reinstallCrashFilter();
 #endif
 #if defined Q_OS_ANDROID
     // because we need qApp
@@ -796,6 +1184,9 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
             AllowSetForegroundWindow(ASFW_ANY);
 #endif
             if (app.sendMessage(args.serialize().toBase64())) {
+#ifdef Q_OS_WIN
+                imagicStartup::setStage(kritarc, imagicStartup::StageDone);
+#endif
                 return 0;
             }
         }
@@ -883,10 +1274,52 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
 
     if (!app.start(args)) {
         KisUsageLogger::log("Could not start Krita Application");
+#ifdef Q_OS_WIN
+        // imagic studio: never exit without telling the user why.
+        imagicStartup::setStage(kritarc, imagicStartup::StageDone);
+        QMessageBox::critical(nullptr,
+                              QStringLiteral("imagic studio"),
+                              QStringLiteral("imagic studio could not finish starting.
+
+"
+                                             "Please email snap@imagic.ink and attach imagic-studio.log from this folder:
+%1")
+                                  .arg(QDir::toNativeSeparators(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))));
+#endif
         return 1;
     }
 
+#ifdef Q_OS_WIN
+    imagicStartup::setStage(kritarc, imagicStartup::StageWindow);
+    imagicStartup::maybeTestCrash("window", startupDecision.safeLevel);
+    // Count the start as good once the window has been up for a few seconds
+    // (first paint and plugin loading happen in that window of time).
+    QTimer::singleShot(3000, &app, [&kritarc]() {
+        imagicStartup::setStage(kritarc, imagicStartup::StageRunning);
+        SetEnvironmentVariableW(L"IMAGIC_STUDIO_RELAUNCH", nullptr);
+        KisUsageLogger::log(QStringLiteral("imagic studio startup: main window is up"));
+    });
+    if (startupDecision.recovered) {
+        const int level = startupDecision.safeLevel;
+        QTimer::singleShot(500, &app, [level]() {
+            KisMainWindow *mw = KisPart::instance()->currentMainwindow();
+            QMessageBox::information(mw,
+                                     QStringLiteral("imagic studio"),
+                                     QStringLiteral("imagic studio did not finish starting last time, so it is now using a safer graphics mode (level %1 of 3).
+
+"
+                                                    "Everything works, but the canvas may feel slower. Installing the latest graphics driver for your PC usually fixes the cause. "
+                                                    "Afterwards you can switch the renderer back in Settings > Configure imagic studio > Display.")
+                                         .arg(level));
+        });
+    }
+#endif
+
     int state = KisApplication::exec();
+
+#ifdef Q_OS_WIN
+    imagicStartup::setStage(kritarc, imagicStartup::StageDone);
+#endif
 
     {
         QSettings kritarc(configPath.absoluteFilePath("imagic-studiodisplayrc"), QSettings::IniFormat);
