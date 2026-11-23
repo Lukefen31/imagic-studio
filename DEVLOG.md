@@ -58,7 +58,7 @@ Known: during the first ~80 s startup (resource DB build), a second launch
 still opens a second instance. That is upstream behaviour, because the
 busy instance cannot answer within the 5 s handoff timeout.
 
-## 2026-11-23 â€” 1.0.3: never start silently, safe graphics recovery
+## 2026-11-23: 1.0.3, never start silently, safe graphics recovery
 
 The same Windows 10 customer (22H2 19045, i5-10210U, Intel UHD 620 only,
 German locale) still saw "nothing happens, no process" on 1.0.2.
@@ -66,7 +66,7 @@ German locale) still saw "nothing happens, no process" on 1.0.2.
 Ruled out: studio has no licence or activation check (licensing is all
 server-side), so the Plus to Max key upgrade cannot matter; the bundle
 imports no VC++ redistributable DLL (pefile scan of every PE file); a
-non-ASCII install path (C:\tmp\JÃ¶rg Test\...), German LANGUAGE and ANGLE
+non-ASCII install path (C:\tmp\Jörg Test\...), German LANGUAGE and ANGLE
 WARP (the no-GPU path) all start fine with 1.0.2. Windows Sandbox is not
 enabled on the dev PC, so no clean-VM run.
 
