@@ -19,6 +19,8 @@ private Q_SLOTS:
     void testOpenGrayscaleMultilayered();
     void testOpenGroupLayers();
     void testOpenLayerStyles();
+    void testOpenAdjustmentLayers();
+    void testRoundTripAdjustmentLayers();
 
     void testOpenFillLayers();
 

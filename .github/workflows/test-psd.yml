@@ -1,0 +1,200 @@
+# imagic studio: run the PSD import/export unit tests.
+#
+# The installer build sets -DBUILD_TESTING=OFF, so nothing in
+# plugins/impex/psd/tests ever runs there. This workflow builds the same
+# way with testing ON and runs just the PSD suite, which is the only
+# automated check the C++ side of the PSD work gets.
+#
+# Runs when PSD code actually changes, on any branch, plus on demand. It is
+# the same multi-hour build as the installer job, but ccache is shared with
+# it, so a warm run is minutes. Path-scoped rather than manual-only because
+# workflow_dispatch can only be triggered for workflows that already exist
+# on the default branch, which makes it useless for verifying a change
+# before that change is merged.
+
+name: Test PSD
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "libs/psd/**"
+      - "plugins/impex/psd/**"
+      - ".github/workflows/test-psd.yml"
+
+concurrency:
+  group: test-psd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEPS_MGMT_SHA: 44a226bacca177515162b45b233f10c95da4d20b
+  CI_UTILITIES_SHA: 9285a277a971fcea3e0332bb5b7906ecfe6116bd
+  LLVM_MINGW_URL: https://github.com/mstorsjo/llvm-mingw/releases/download/20251118/llvm-mingw-20251118-ucrt-x86_64.zip
+  CMAKE_URL: https://github.com/Kitware/CMake/releases/download/v3.31.8/cmake-3.31.8-windows-x86_64.zip
+
+jobs:
+  test:
+    runs-on: windows-2022
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Enable long paths
+        run: git config --system core.longpaths true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Clone KDE CI helper repos (pinned)
+        run: |
+          git clone https://invent.kde.org/packaging/krita-deps-management.git
+          git -C krita-deps-management checkout $env:DEPS_MGMT_SHA
+          git clone https://invent.kde.org/packaging/krita-ci-utilities.git krita-deps-management/ci-utilities
+          git -C krita-deps-management/ci-utilities checkout $env:CI_UTILITIES_SHA
+
+      - name: Install toolchain (llvm-mingw, CMake 3.31, Ninja, ccache)
+        run: |
+          curl -sSL -o llvm-mingw.zip $env:LLVM_MINGW_URL
+          Expand-Archive llvm-mingw.zip -DestinationPath C:\toolchain
+          $llvm = Get-ChildItem C:\toolchain -Directory -Filter "llvm-mingw*" | Select-Object -First 1
+          curl -sSL -o cmake.zip $env:CMAKE_URL
+          Expand-Archive cmake.zip -DestinationPath C:\toolchain
+          $cmake = Get-ChildItem C:\toolchain -Directory -Filter "cmake*" | Select-Object -First 1
+          choco install ninja ccache -y --no-progress
+          "$($llvm.FullName)\bin"  | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          "$($cmake.FullName)\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Report runner resources
+        run: |
+          Get-PSDrive C | Select-Object Used,Free
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object @{n='FreeGB';e={[math]::Round($_.FreePhysicalMemory/1MB,2)}},
+                          @{n='TotalGB';e={[math]::Round($_.TotalVisibleMemorySize/1MB,2)}}
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          # Shares the installer job's cache; a warm one cuts this to minutes.
+          key: ccache-windows-qt5-tests-${{ github.sha }}
+          restore-keys: |
+            ccache-windows-qt5-tests-
+            ccache-windows-qt5-
+
+      - name: Python venv + requirements
+        run: |
+          python -m venv venv --upgrade-deps
+          . venv\Scripts\Activate.ps1
+          pip install -r krita-deps-management/requirements.txt
+          pip install -r krita-deps-management/ci-utilities/requirements-windows.txt
+
+      - name: Build with tests enabled
+        env:
+          KDECI_BUILD_TYPE: Release
+          # Attempt 1 lost the runner 1h39m into this step with "lost
+          # communication", the classic shape of an out-of-memory kill.
+          # BUILD_TESTING=ON adds hundreds of link targets that the installer
+          # build never produces, and parallel linking is the memory peak.
+          CMAKE_BUILD_PARALLEL_LEVEL: "2"
+          KDECI_CC_CACHE: ${{ github.workspace }}\.ccache
+          KDECI_CACHE_PATH: ${{ github.workspace }}\.kde-dep-cache
+          KDECI_GITLAB_SERVER: https://invent.kde.org/
+          KDECI_PACKAGE_PROJECT: teams/ci-artifacts/krita-windows
+          KDECI_REPO_METADATA_PATH: ${{ github.workspace }}\krita-deps-management\repo-metadata
+          KDECI_COMPRESS_PACKAGES_ON_DOWNLOAD: "False"
+          # The one difference from the installer build.
+          KDECI_EXTRA_CMAKE_ARGS: "-DHIDE_SAFE_ASSERTS=ON -DBUILD_TESTING=ON -DBRANDING=default"
+          KDECI_SIGN_BINARIES: "False"
+          KRITACI_SKIP_DEBUG_PACKAGE: "True"
+          KRITACI_BUILD_INSTALLERS: "False"
+          KRITACI_SKIP_UPLOAD_NIGHTLY_PACKAGE: "True"
+          KRITACI_SKIP_BUILD_3RDPARTY_PLUGINS: "True"
+          PYTHONUTF8: "1"
+          CI_PROJECT_NAME: krita
+          CI_PROJECT_DIR: ${{ github.workspace }}
+          CI_COMMIT_REF_NAME: ${{ github.ref_name }}
+          CI_COMMIT_SHORT_SHA: ${{ github.sha }}
+        run: |
+          . venv\Scripts\Activate.ps1
+          git config --global --add safe.directory $env:CI_PROJECT_DIR
+          $env:CI_COMMIT_SHORT_SHA = $env:CI_COMMIT_SHORT_SHA.Substring(0, 8)
+          python -u krita-deps-management/tools/replace-branch-in-seed-file.py krita-deps-management/latest/krita-deps.yml -p -o branch-corrected-deps.yml -d master
+          python -u krita-deps-management/tools/generate-deps-file.py -s branch-corrected-deps.yml -o .kde-ci.yml
+          # --only-build is load-bearing. run-ci-build.py computes
+          #   run_tests = run-tests AND build-tests AND NOT only_build
+          # so BUILD_TESTING=ON otherwise makes it run KRITA'S ENTIRE test
+          # suite, GUI and OpenGL tests included, on a headless runner. Two
+          # attempts died at ~1h40m with 'the hosted runner lost
+          # communication' and no logs, because the process that uploads the
+          # logs was the one being killed. We only ever wanted the PSD tests,
+          # which the next step runs explicitly.
+          python -u krita-deps-management/ci-utilities/run-ci-build.py --project $env:CI_PROJECT_NAME --branch $env:CI_COMMIT_REF_NAME --platform Windows/Qt5/Shared --skip-publishing --only-build --env ci-env 2>&1 | Tee-Object -FilePath "build-tests.log"
+
+      - name: Report runner resources after build
+        if: always()
+        run: Get-PSDrive C | Select-Object Used,Free
+
+      - name: Run the PSD tests
+        # cmd, not pwsh: the KDE build script writes its environment as a
+        # Windows .bat of "set VAR=value" lines, and calling it is the
+        # supported way to inherit the PATH the built binaries need.
+        shell: cmd
+        run: |
+          call ci-env.bat
+          rem Without that PATH every test exits 0xc0000135 (DLL not found)
+          rem in 0.01s, having never actually started.
+          rem Per-test timeout so a hung test fails this step rather than
+          rem taking the whole runner down with it.
+          rem -VV, not --output-on-failure: the latter printed nothing at all
+          rem for a test that ran 26s and failed, which left no way to tell
+          rem which assertion broke.
+          ctest --test-dir _build -R "psd" -VV --timeout 600 > ctest-psd.log 2>&1
+          set CTEST_EXIT=%ERRORLEVEL%
+          type ctest-psd.log
+          exit /b %CTEST_EXIT%
+
+      - name: Run only the adjustment-layer tests
+        # kis_psd_test carries dozens of pre-existing functions. Running
+        # ours by name is the only way to tell "our code is broken" apart
+        # from "something else in this suite was already failing".
+        #
+        # QTest's -o writes results straight to a file. That matters here:
+        # Krita's test binaries are GUI-subsystem executables on Windows, so
+        # their stdout never reaches ctest, which is why -VV captured nothing
+        # at all for a test that ran for 20 seconds.
+        if: always()
+        shell: cmd
+        run: |
+          call ci-env.bat
+          set PSDTEST=_build\bin\kis_psd_test.exe
+          dir %PSDTEST%
+
+          rem Everything, to see what was already failing before this branch.
+          %PSDTEST% -o full-suite.txt,txt
+          echo ---- full kis_psd_test results ----
+          type full-suite.txt
+
+          rem Then just ours, which is the actual verdict on this change.
+          %PSDTEST% -o adjustments.txt,txt testOpenAdjustmentLayers testRoundTripAdjustmentLayers
+          set OUR_EXIT=%ERRORLEVEL%
+          echo ---- adjustment-layer results ----
+          type adjustments.txt
+          exit /b %OUR_EXIT%
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: psd-test-logs-${{ github.run_number }}
+          path: |
+            build-tests.log
+            ctest-psd.log
+            full-suite.txt
+            adjustments.txt
+          if-no-files-found: warn

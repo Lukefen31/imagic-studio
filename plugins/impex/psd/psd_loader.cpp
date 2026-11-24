@@ -39,6 +39,10 @@
 #include <kis_transparency_mask.h>
 #include <kis_generator_layer.h>
 #include <kis_generator_registry.h>
+#include <kis_adjustment_layer.h>
+#include <filter/kis_filter.h>
+#include <filter/kis_filter_configuration.h>
+#include <filter/kis_filter_registry.h>
 #include <kis_guides_config.h>
 
 #include <kis_asl_layer_style_serializer.h>
@@ -58,6 +62,80 @@
 #include "KisImageBarrierLock.h"
 #include "KisImportUserFeedbackInterface.h"
 
+
+namespace
+{
+/**
+ * Translate a Photoshop adjustment layer into a Krita filter configuration.
+ *
+ * Returns null when the adjustment is one we do not map yet, or when the
+ * filter is not registered in this build; the caller then falls back to
+ * importing the layer as pixels, which is what happened to every adjustment
+ * layer before this existed.
+ */
+KisFilterConfigurationSP psdAdjustmentConfiguration(const PsdAdditionalLayerInfoBlock &infoBlocks,
+                                                   KisResourcesInterfaceSP resourcesInterface)
+{
+    QString filterId;
+    switch (infoBlocks.adjustmentType) {
+    case psd_adjustment_invert:
+        filterId = "invert";
+        break;
+    case psd_adjustment_posterize:
+        filterId = "posterize";
+        break;
+    case psd_adjustment_threshold:
+        filterId = "threshold";
+        break;
+    case psd_adjustment_levels:
+        filterId = "levels";
+        break;
+    case psd_adjustment_none:
+        return KisFilterConfigurationSP();
+    }
+
+    KisFilterSP filter = KisFilterRegistry::instance()->value(filterId);
+    if (!filter) {
+        warnKrita << "WARNING: no" << filterId << "filter is registered; importing the adjustment layer as pixels";
+        return KisFilterConfigurationSP();
+    }
+
+    KisFilterConfigurationSP cfg = filter->defaultConfiguration(resourcesInterface);
+    if (!cfg) {
+        return KisFilterConfigurationSP();
+    }
+
+    switch (infoBlocks.adjustmentType) {
+    case psd_adjustment_posterize:
+        // Photoshop and Krita both count output levels per channel, and
+        // Krita's widget clamps to 2..128.
+        cfg->setProperty("steps", qBound<int>(2, infoBlocks.adjustmentValue, 128));
+        break;
+    case psd_adjustment_threshold:
+        cfg->setProperty("threshold", qBound<int>(0, infoBlocks.adjustmentValue, 255));
+        break;
+    case psd_adjustment_levels: {
+        // KisLevelsFilterConfiguration::setProperty intercepts these five
+        // legacy names and rebuilds the modern "lightness" curve from them,
+        // so setting them is the supported way in from outside the plugin.
+        const psd_levels_record &levels = infoBlocks.levels;
+        cfg->setProperty("blackvalue", qBound<int>(0, levels.inputFloor, 255));
+        cfg->setProperty("whitevalue", qBound<int>(0, levels.inputCeiling, 255));
+        cfg->setProperty("outblackvalue", qBound<int>(0, levels.outputFloor, 255));
+        cfg->setProperty("outwhitevalue", qBound<int>(0, levels.outputCeiling, 255));
+        // Photoshop stores gamma multiplied by 100. A zero would mean a
+        // degenerate transfer function, so treat it as untouched.
+        cfg->setProperty("gammavalue", levels.gamma > 0 ? static_cast<double>(levels.gamma) / 100.0 : 1.0);
+        break;
+    }
+    case psd_adjustment_invert:
+    case psd_adjustment_none:
+        break;
+    }
+
+    return cfg;
+}
+} // namespace
 
 PSDLoader::PSDLoader(KisDocument *doc, KisImportUserFeedbackInterface *feedbackInterface)
     : m_image(0)
@@ -538,6 +616,17 @@ KisImportExportErrorCode PSDLoader::decode(QIODevice &io)
                 }
                 textLayer->addShape(shape);
                 layer = textLayer;
+            } else if (KisFilterConfigurationSP adjustmentConfig =
+                           psdAdjustmentConfiguration(layerRecord->infoBlocks, resourceProxy.resourcesInterface())) {
+                // An adjustment layer carries no pixels of its own, so like
+                // the fill and text branches above it never calls
+                // readPixelData. That is safe because channel data is read
+                // by absolute offset (see psd_pixel_utils), not sequentially.
+                adjustmentConfig->createLocalResourcesSnapshot();
+                layer = new KisAdjustmentLayer(m_image, layerRecord->layerName, adjustmentConfig, m_image->globalSelection());
+                // Unlike the paint and shape layers above, this constructor
+                // takes no opacity, so it has to be applied afterwards.
+                layer->setOpacity(layerRecord->opacity);
             } else {
                 layer = new KisPaintLayer(m_image, layerRecord->layerName, layerRecord->opacity);
                 if (!layerRecord->readPixelData(io, layer->paintDevice())) {

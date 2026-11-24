@@ -16,6 +16,9 @@
 #include <kis_effect_mask.h>
 #include <kis_group_layer.h>
 #include <kis_generator_layer.h>
+#include <kis_adjustment_layer.h>
+#include <kis_paint_device.h>
+#include <filter/kis_filter_configuration.h>
 #include <kis_image.h>
 #include <kis_node.h>
 #include <kis_paint_layer.h>
@@ -679,6 +682,41 @@ void PSDLayerMaskSection::writePsdImpl(QIODevice &io, KisNodeSP rootLayer, psd_c
                 const KisGroupLayer *groupLayer = qobject_cast<KisGroupLayer *>(node.data());
                 const bool nodeIsPassThrough = groupLayer && groupLayer->passThroughMode();
 
+                // An adjustment layer must be written as its adjustment block,
+                // not as pixels: node->projection() holds the FILTERED result
+                // of everything beneath it, so exporting that would bake the
+                // effect in and hide the layers below it.
+                const KisAdjustmentLayer *adjustmentLayer = qobject_cast<KisAdjustmentLayer *>(node.data());
+                psd_adjustment_type adjustmentType = psd_adjustment_none;
+                quint16 adjustmentValue = 0;
+                psd_levels_record adjustmentLevels;
+                if (adjustmentLayer && adjustmentLayer->filter()) {
+                    KisFilterConfigurationSP filterConfig = adjustmentLayer->filter();
+                    const QString filterName = filterConfig->name();
+                    if (filterName == "levels") {
+                        // Only the lightness-mode levels map onto Photoshop's
+                        // composite record; a per-channel one would need the
+                        // other 28 records filled in, so leave it to rasterise
+                        // rather than export something subtly wrong.
+                        if (filterConfig->getString("mode", "lightness") == "lightness") {
+                            adjustmentLevels.inputFloor = static_cast<quint16>(qBound(0, filterConfig->getInt("blackvalue", 0), 255));
+                            adjustmentLevels.inputCeiling = static_cast<quint16>(qBound(0, filterConfig->getInt("whitevalue", 255), 255));
+                            adjustmentLevels.outputFloor = static_cast<quint16>(qBound(0, filterConfig->getInt("outblackvalue", 0), 255));
+                            adjustmentLevels.outputCeiling = static_cast<quint16>(qBound(0, filterConfig->getInt("outwhitevalue", 255), 255));
+                            adjustmentLevels.gamma = static_cast<quint16>(qBound(1, qRound(filterConfig->getDouble("gammavalue", 1.0) * 100.0), 999));
+                            adjustmentType = psd_adjustment_levels;
+                        }
+                    } else if (filterName == "invert") {
+                        adjustmentType = psd_adjustment_invert;
+                    } else if (filterName == "posterize") {
+                        adjustmentValue = static_cast<quint16>(qBound(2, filterConfig->getInt("steps", 16), 128));
+                        adjustmentType = psd_adjustment_posterize;
+                    } else if (filterName == "threshold") {
+                        adjustmentValue = static_cast<quint16>(qBound(0, filterConfig->getInt("threshold", 128), 255));
+                        adjustmentType = psd_adjustment_threshold;
+                    }
+                }
+
                 const KisGeneratorLayer *fillLayer = qobject_cast<KisGeneratorLayer *>(node.data());
                 QDomDocument fillConfig;
                 psd_fill_type fillType = psd_fill_solid_color;
@@ -861,6 +899,13 @@ void PSDLayerMaskSection::writePsdImpl(QIODevice &io, KisNodeSP rootLayer, psd_c
                     nodeName = node->name();
                     layerContentDevice = onlyTransparencyMask ? node->original() : node->projection();
 
+                    if (adjustmentType != psd_adjustment_none) {
+                        // Photoshop adjustment layers carry no pixels of their
+                        // own. Handing over the projection here would write the
+                        // filtered image beneath as an opaque layer.
+                        layerContentDevice = new KisPaintDevice(node->colorSpace());
+                    }
+
                     /**
                      * For fill layers we save their internal selection as a separate transparency mask
                      */
@@ -968,6 +1013,9 @@ void PSDLayerMaskSection::writePsdImpl(QIODevice &io, KisNodeSP rootLayer, psd_c
 
                 layerRecord->fillType = fillType;
                 layerRecord->fillConfig = fillConfig;
+                layerRecord->adjustmentType = adjustmentType;
+                layerRecord->adjustmentValue = adjustmentValue;
+                layerRecord->adjustmentLevels = adjustmentLevels;
 
                 layerRecord->vectorMask = vectorMask;
                 layerRecord->vectorStroke = strokeData;
